@@ -1,0 +1,14 @@
+[project]
+name = "mesh_project"
+version = "0.1.0"
+description = "Mesh messenger python core"
+requires-python = ">=3.12"
+
+dependencies = [
+    "protobuf>=4.21",
+    "pynacl>=1.5",
+    "tqdm>=4.65"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

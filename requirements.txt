@@ -1,0 +1,8 @@
+protobuf>=4.21
+pynacl>=1.5
+pytest>=7.0
+pytest-benchmark>=4.0
+tqdm>=4.65
+mypy>=1.0
+black>=23.0
+ruff>=0.1

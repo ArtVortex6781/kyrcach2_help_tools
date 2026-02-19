@@ -11,3 +11,4 @@ fabric.properties
 *.iml
 out
 gen
+.venv
