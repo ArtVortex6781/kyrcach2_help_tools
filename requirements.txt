@@ -6,3 +6,4 @@ tqdm>=4.65
 mypy>=1.0
 black>=23.0
 ruff>=0.1
+mypy-protobuf==5.0.0
