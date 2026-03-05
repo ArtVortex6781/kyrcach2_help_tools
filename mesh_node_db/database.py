@@ -135,7 +135,7 @@ class NodeDB:
                     "INSERT INTO errors (ts, op, entity_id, error_text) VALUES (?, ?, ?, ?)",
                     (ts, getattr(e, "op", "unknown"), None, repr(e)),
                     # TODO(#1): Чтобы передовалось имя операции (создать/обновить/удалить) в функцию transaction()
-                    #  и запишить его в errors.op вместо "unknown"
+                    #  и записать его в errors.op вместо "unknown"
                 )
                 self._conn.commit()
             except Exception:
