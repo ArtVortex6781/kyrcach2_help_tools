@@ -2,7 +2,7 @@ from __future__ import annotations
 import sqlite3
 import json
 import time
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Callable
+from typing import Any, Mapping, Optional, Sequence, Tuple
 from contextlib import contextmanager
 from dataclasses import dataclass
 import logging
@@ -269,7 +269,18 @@ class NodeDB:
         dest_conn.close()
 
     def run_migration_script(self, sql: str) -> None:
-        """Apply a manual migration SQL script (string)."""
+        """Apply a manual migration SQL script (str)."""
         self._require_open()
-        with self.transaction() as cur:
-            cur.executescript(sql)
+        try:
+            self._conn.executescript(sql)
+        except Exception as e:
+            try:
+                ts = int(time.time())
+                self._conn.execute(
+                    "INSERT INTO errors (ts, op, entity_id, error_text) VALUES (?, ?, ?, ?)",
+                    (ts, "migration", None, repr(e)),
+                )
+                self._conn.commit()
+            except Exception:
+                pass
+            raise
