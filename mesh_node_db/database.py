@@ -45,7 +45,6 @@ class NodeDB:
     - batch_write and iteration
     - simple migrations (manual SQL files in migrations/)
     """
-
     DEFAULT_SCHEMA = """
     CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER PRIMARY KEY
@@ -82,6 +81,15 @@ class NodeDB:
     # -----------------------
     # connection management
     # -----------------------
+
+    def _require_open(self) -> None:
+        """
+        Ensure that the database connection is initialized and open.
+        Raises NodeDBError If the database connection has not been opened.
+        """
+        if not self._conn:
+            raise NodeDBError("Database connection is not open.")
+
     def open(self, timeout: float = 5.0) -> None:
         """Open connection and ensure base schema / PRAGMAs."""
         if self._conn:
@@ -102,8 +110,7 @@ class NodeDB:
 
     def _ensure_schema(self) -> None:
         """Create default tables if needed. Later, run migration scripts from migrations/."""
-        if not self._conn:
-            raise NodeDBError("Database is not open")
+        self._require_open()
         cur = self._conn.cursor()
         cur.executescript(self.DEFAULT_SCHEMA)
         cur.close()
@@ -114,8 +121,7 @@ class NodeDB:
     @contextmanager
     def transaction(self):
         """Simple transaction context manager: BEGIN / COMMIT / ROLLBACK and basic error logging."""
-        if not self._conn:
-            raise NodeDBError("Database is not open")
+        self._require_open()
         cur = self._conn.cursor()
         try:
             cur.execute("BEGIN;")
@@ -142,8 +148,7 @@ class NodeDB:
 
     def create(self, entity_id: str, data: Mapping[str, Any], kind: Optional[str] = None) -> None:
         """Create a new entity. Raises NodeDBError if exists."""
-        if not self._conn:
-            raise NodeDBError("DB not open")
+        self._require_open()
         now = int(time.time())
         payload = json.dumps(data, separators = (",", ":"), ensure_ascii = False).encode()
         if self._crypto:
@@ -156,8 +161,7 @@ class NodeDB:
 
     def read(self, entity_id: str) -> Optional[Entity]:
         """Read entity by id; returns Entity or None if not found."""
-        if not self._conn:
-            raise NodeDBError("DB not open")
+        self._require_open()
         cur = self._conn.cursor()
         cur.execute("SELECT id, kind, created_at, updated_at, data FROM entities WHERE id = ?", (entity_id,))
         row = cur.fetchone()
@@ -172,8 +176,7 @@ class NodeDB:
 
     def update(self, entity_id: str, fields: Mapping[str, Any]) -> None:
         """Partial update: merges provided fields into existing dict. Raises if not found."""
-        if not self._conn:
-            raise NodeDBError("DB not open")
+        self._require_open()
         existing = self.read(entity_id)
         if existing is None:
             raise NodeDBError("Entity not found")
@@ -189,8 +192,7 @@ class NodeDB:
             )
 
     def delete(self, entity_id: str) -> None:
-        if not self._conn:
-            raise NodeDBError("DB not open")
+        self._require_open()
         with self.transaction() as cur:
             cur.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
 
@@ -203,8 +205,7 @@ class NodeDB:
         :param items: sequence of (entity_id, kind, data)
         Performs one transaction with multiple inserts/updates (upsert).
         """
-        if not self._conn:
-            raise NodeDBError("DB not open")
+        self._require_open()
         now = int(time.time())
         with self.transaction() as cur:
             for entity_id, kind, data in items:
@@ -231,6 +232,7 @@ class NodeDB:
 
         :return Entity objects with the id, kind, data, created_at, updated_at fields.
         """
+        self._require_open()
         cur = self._conn.execute("""SELECT id, kind, data, created_at, updated_at FROM entities ORDER BY created_at""")
         for entity_id, kind, raw, created_at, updated_at in cur:
             try:
@@ -260,8 +262,7 @@ class NodeDB:
 
     def backup(self, dest_path: str) -> None:
         """Create a sqlite backup file (online backup)."""
-        if not self._conn:
-            raise NodeDBError("DB not open")
+        self._require_open()
         dest_conn = sqlite3.connect(dest_path)
         with dest_conn:
             self._conn.backup(dest_conn)
@@ -269,7 +270,6 @@ class NodeDB:
 
     def run_migration_script(self, sql: str) -> None:
         """Apply a manual migration SQL script (string)."""
-        if not self._conn:
-            raise NodeDBError("DB not open")
+        self._require_open()
         with self.transaction() as cur:
             cur.executescript(sql)
