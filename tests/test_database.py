@@ -1,7 +1,7 @@
 import sqlite3
 import pytest
 
-from mesh_node_db.database import NodeDB, Entity
+from mesh_node_db import NodeDB, Entity
 
 
 class DummyCrypto:

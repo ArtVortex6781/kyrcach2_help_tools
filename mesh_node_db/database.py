@@ -2,7 +2,7 @@ from __future__ import annotations
 import sqlite3
 import json
 import time
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import logging
@@ -224,7 +224,7 @@ class NodeDB:
                     (entity_id, kind, now, now, payload),
                 )
 
-    def iter_all(self, strict: bool = True):
+    def iter_all(self, strict: bool = True) -> Iterator[Entity]:
         """
         An iterator on all entities in the database.
         :param strict: if True, when corrupted data is detected, decryption error or invalid JSON)
