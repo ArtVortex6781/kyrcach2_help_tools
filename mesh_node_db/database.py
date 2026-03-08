@@ -148,7 +148,6 @@ class NodeDB:
 
     def create(self, entity_id: str, data: Mapping[str, Any], kind: Optional[str] = None) -> None:
         """Create a new entity. Raises NodeDBError if exists."""
-        self._require_open()
         now = int(time.time())
         payload = json.dumps(data, separators = (",", ":"), ensure_ascii = False).encode()
         if self._crypto:
@@ -176,7 +175,6 @@ class NodeDB:
 
     def update(self, entity_id: str, fields: Mapping[str, Any]) -> None:
         """Partial update: merges provided fields into existing dict. Raises if not found."""
-        self._require_open()
         existing = self.read(entity_id)
         if existing is None:
             raise NodeDBError("Entity not found")
@@ -192,7 +190,6 @@ class NodeDB:
             )
 
     def delete(self, entity_id: str) -> None:
-        self._require_open()
         with self.transaction() as cur:
             cur.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
 
@@ -205,7 +202,6 @@ class NodeDB:
         :param items: sequence of (entity_id, kind, data)
         Performs one transaction with multiple inserts/updates (upsert).
         """
-        self._require_open()
         now = int(time.time())
         with self.transaction() as cur:
             for entity_id, kind, data in items:
