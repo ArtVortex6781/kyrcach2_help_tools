@@ -223,10 +223,10 @@ class NodeDB:
     def iter_all(self, strict: bool = True) -> Iterator[Entity]:
         """
         An iterator on all entities in the database.
-        :param strict: if True, when corrupted data is detected, decryption error or invalid JSON)
+        :param strict: if True, when corrupted data is detected, decryption error or invalid JSON
         The function throws an exception. If False, such entries are skipped.
 
-        :return Entity objects with the id, kind, data, created_at, updated_at fields.
+        :return: Entity objects with the id, kind, data, created_at, updated_at fields.
         """
         self._require_open()
         cur = self._conn.execute("""SELECT id, kind, data, created_at, updated_at FROM entities ORDER BY created_at""")
