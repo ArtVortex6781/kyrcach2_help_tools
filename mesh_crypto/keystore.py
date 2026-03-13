@@ -317,7 +317,7 @@ class FileKeyStore:
         aesgcm = AESGCM(self._master_key)
         nonce = os.urandom(12)
         ct = aesgcm.encrypt(nonce, plaintext, None)
-        return {"version": 1, "enc": "aesgm", "nonce": _b64(nonce), "ciphertext": _b64(ct)}
+        return {"version": 1, "enc": "aesgcm", "nonce": _b64(nonce), "ciphertext": _b64(ct)}
 
     def _decrypt_with_master(self, blob: Dict[str, Any]) -> bytes:
         """
