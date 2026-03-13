@@ -3,17 +3,15 @@ from __future__ import annotations
 import base64
 import json
 import os
-import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 from uuid import UUID, uuid4
-from .keys import *
+from . import keys as keys_mod
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from cryptography.hazmat.primitives import serialization
 
 __all__ = [
     "FileKeyStore",
@@ -207,6 +205,7 @@ class FileKeyStore:
     MASTER_FILENAME = "master.key"
     KEYS_DIRNAME = "keys"
     METADATA_FILENAME = "keystore.json"
+    __not_load_mastk = "master key not loaded; call load() or create_new() first"
 
     def __init__(self, path: str | Path, protector: Protector):
         """
@@ -299,11 +298,11 @@ class FileKeyStore:
                  - ciphertext: base64-encoded encrypted data
         """
         if self._master_key is None:
-            raise ValueError("master key not loaded")
+            raise ValueError(self.__not_load_mastk)
         aesgcm = AESGCM(self._master_key)
         nonce = os.urandom(12)
         ct = aesgcm.encrypt(nonce, plaintext, None)
-        return {"version": 1, "nonce": _b64(nonce), "ciphertext": _b64(ct)}
+        return {"version": 1, "enc": "aesgm", "nonce": _b64(nonce), "ciphertext": _b64(ct)}
 
     def _decrypt_with_master(self, blob: Dict[str, Any]) -> bytes:
         """
@@ -313,14 +312,32 @@ class FileKeyStore:
         :return: Decrypted bytes.
         """
         if self._master_key is None:
-            raise ValueError("master key not loaded")
+            raise ValueError(self.__not_load_mastk)
         aesgcm = AESGCM(self._master_key)
         nonce = _unb64(blob["nonce"])
         ct = _unb64(blob["ciphertext"])
         return aesgcm.decrypt(nonce, ct, None)
 
+    # ---------- helper for keys ----------
+
+    @staticmethod
+    def _normalize_key_id(key_id: keys_mod.KeyId | str | bytes) -> keys_mod.KeyId:
+        """
+        Normalize a key identifier into a UUID instance.
+
+        :param key_id: Key identifier in UUID, hex string, or raw bytes.
+        :return: UUID object.
+        """
+        if isinstance(key_id, keys_mod.KeyId):
+            return key_id
+        if isinstance(key_id, str):
+            return keys_mod.KeyId(key_id)
+        if isinstance(key_id, (bytes, bytearray)):
+            return keys_mod.KeyIdHelpers.key_id_from_bytes(bytes(key_id))
+        raise TypeError("key_id must be UUID, hex string, or 16-byte representation")
+
     # ---------- public API ----------
-    def generate_key(self, kind: str = "symmetric") -> UUID:
+    def generate_key(self, kind: str = "symmetric") -> keys_mod.KeyId:
         """
         Generate a new cryptographic key of the specified type, encrypt it with the master key,
         and store it in the keystore. If no active key exists, set this key as active.
@@ -333,16 +350,19 @@ class FileKeyStore:
         :return: UUID of the generated key.
         """
         if self._master_key is None:
-            raise ValueError("master key not loaded; call load() or create_new() first")
+            raise ValueError(self.__not_load_mastk)
 
-        key_id: UUID = KeyIdHelpers.new_key_id()
+        key_id = keys_mod.KeyIdHelpers.new_key_id()
         created_at = int(time.time())
 
         if kind == "symmetric":
             key_bytes = os.urandom(32)
             meta = {"type": "symmetric", "created_at": created_at}
-        elif kind == "ed25519":
-            pair = SigningKeyPair.generate()
+        elif kind in ("ed25519", "x25519"):
+            pair = keys_mod.SigningKeyPair.generate() if kind == "ed25519" else keys_mod.EncryptionKeyPair.generate()
+
+            from cryptography.hazmat.primitives import serialization
+
             sk_bytes = pair.sk.private_bytes(
                 encoding = serialization.Encoding.Raw,
                 format = serialization.PrivateFormat.Raw,
@@ -352,19 +372,7 @@ class FileKeyStore:
                 encoding = serialization.Encoding.Raw, format = serialization.PublicFormat.Raw
             )
             key_bytes = sk_bytes
-            meta = {"type": "ed25519", "created_at": created_at, "pub": _b64(pk_bytes)}
-        elif kind == "x25519":
-            pair = EncryptionKeyPair.generate()
-            sk_bytes = pair.sk.private_bytes(
-                encoding = serialization.Encoding.Raw,
-                format = serialization.PrivateFormat.Raw,
-                encryption_algorithm = serialization.NoEncryption(),
-            )
-            pk_bytes = pair.pk.public_bytes(
-                encoding = serialization.Encoding.Raw, format = serialization.PublicFormat.Raw
-            )
-            key_bytes = sk_bytes
-            meta = {"type": "x25519", "created_at": created_at, "pub": _b64(pk_bytes)}
+            meta = {"type": kind, "created_at": created_at, "pub": _b64(pk_bytes)}
         else:
             raise ValueError("unsupported key kind")
 
@@ -378,7 +386,7 @@ class FileKeyStore:
             self._write_meta()
         return key_id
 
-    def import_key(self, key_id: UUID, key_bytes: bytes, kind: str) -> None:
+    def import_key(self, key_id: keys_mod.KeyId | str | bytes, key_bytes: bytes, kind: str) -> None:
         """
         Import an externally-provided raw key into the keystore under the given key_id.
 
@@ -387,7 +395,8 @@ class FileKeyStore:
         :param kind: Type of the key ("symmetric", "ed25519", "x25519").
         """
         if self._master_key is None:
-            raise ValueError("master key not loaded")
+            raise ValueError(self.__not_load_mastk)
+        key_id = self._normalize_key_id(key_id)
         created_at = int(time.time())
         meta = {"type": kind, "created_at": created_at}
         blob = self._encrypt_with_master(key_bytes)
@@ -396,13 +405,14 @@ class FileKeyStore:
         path.write_text(json.dumps(blob, separators = (",", ":")), encoding = "utf-8")
         _ensure_mode_600(path)
 
-    def get_key(self, key_id: UUID) -> Tuple[bytes, Dict[str, Any]]:
+    def get_key(self, key_id: keys_mod.KeyId | str | bytes) -> Tuple[bytes, Dict[str, Any]]:
         """
         Retrieve the raw key bytes and metadata for a given key_id.
 
         :param key_id: UUID of the key to fetch.
         :return: Tuple of (raw_key_bytes, metadata dictionary).
         """
+        key_id = self._normalize_key_id(key_id)
         path = self._key_file_path(key_id)
         if not path.exists():
             raise KeyError(key_id.hex)
@@ -423,38 +433,44 @@ class FileKeyStore:
             try:
                 blob = json.loads(p.read_text(encoding = "utf-8"))
                 meta = blob.get("meta", {})
-                key_id_hex = p.stem
-                out.append({"key_id": key_id_hex, "meta": meta})
+                key_id = keys_mod.KeyId(p.stem)
+                out.append({"key_id": key_id, "meta": meta})
             except Exception:
                 continue
         return out
 
-    def set_active_key(self, key_id: UUID) -> None:
+    def set_active_key(self, key_id: keys_mod.KeyId | str | bytes) -> None:
         """
         Set the specified key as the active key in the keystore metadata.
 
         :param key_id: UUID of the key to set as active.
         """
+        key_id = self._normalize_key_id(key_id)
+        if not self._key_file_path(key_id).exists():
+            raise FileNotFoundError("key not found")
         self._meta["active_key"] = key_id.hex
         self._write_meta()
 
-    def get_active_key_id(self) -> Optional[UUID]:
+    def get_active_key_id(self) -> Optional[keys_mod.KeyId]:
         """
-        Return the UUID of the currently active key, or None if no active key is set.
+        Return the UUID of the currently active key.
 
         :return: UUID of the active key or None.
         """
         v = self._meta.get("active_key")
-        return UUID(v) if v else None
+        return keys_mod.KeyId(v) if v else None
 
-    def rotate_key(self, old_key_id: UUID, new_key_id: UUID, migrator: Optional[callable] = None) -> None:
+    def rotate_key(self, old_key_id: keys_mod.KeyId | str | bytes, new_key_id: keys_mod.KeyId | str | bytes,
+                   migrator: Optional[callable] = None) -> None:
         """
-        Rotate the keystore to use a new active key and optionally migrate existing data.
+        Rotate the keystore to a new active key and optionally migrate encrypted data.
 
-        :param old_key_id: UUID of the old key (for migrator reference).
-        :param new_key_id: UUID of the new key to activate.
-        :param migrator: Optional callable(old_key_id, new_key_id) to migrate existing encrypted data.
+        :param old_key_id: Previous key identifier.
+        :param new_key_id: New key identifier.
+        :param migrator: Optional callable(old_key_id, new_key_id).
         """
+        old_key_id = self._normalize_key_id(old_key_id)
+        new_key_id = self._normalize_key_id(new_key_id)
         if not self._key_file_path(new_key_id).exists():
             raise FileNotFoundError("new key not found")
         self.set_active_key(new_key_id)
@@ -463,13 +479,11 @@ class FileKeyStore:
 
     def get_active_key(self) -> Optional[Tuple[bytes, Dict[str, Any]]]:
         """
-        Rotate the keystore to use a new active key and optionally migrate existing data.
+        Return the raw bytes and metadata of the currently active key, or None if no active key is set.
 
-        :param old_key_id: UUID of the old key (for migrator reference).
-        :param new_key_id: UUID of the new key to activate.
-        :param migrator: Optional callable(old_key_id, new_key_id) to migrate existing encrypted data.
+        :return: Tuple (raw_key_bytes, metadata) or None.
         """
-        kid = self.get_active_key_id()
-        if kid is None:
+        key_id = self.get_active_key_id()
+        if key_id is None:
             return None
-        return self.get_key(kid)
+        return self.get_key(key_id)
