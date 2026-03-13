@@ -51,6 +51,17 @@ def _ensure_mode_600(path: Path) -> None:
         pass
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """
+    Atomically write text to a file.
+    Prevents partial writes if the process crashes during file write.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding = "utf-8")
+    _ensure_mode_600(tmp)
+    os.replace(tmp, path)
+
+
 # -------------------------
 # Protector abstraction
 # -------------------------
@@ -246,8 +257,10 @@ class FileKeyStore:
             raise FileExistsError("master.key already exists")
         master_key = os.urandom(32)
         meta = self._protector.wrap(master_key)
-        self._master_meta_path.write_text(json.dumps(meta, separators = (",", ":")), encoding = "utf-8")
-        _ensure_mode_600(self._master_meta_path)
+        _atomic_write_text(
+            self._master_meta_path,
+            json.dumps(meta, separators = (",", ":"))
+        )
         self._master_key = master_key
         self._meta = {"created_at": int(time.time()), "active_key": None}
         self._write_meta()
@@ -274,8 +287,10 @@ class FileKeyStore:
         Persist the in-memory metadata to keystore.json.
         Ensures file permissions are restricted to owner (mode 600).
         """
-        self._meta_path.write_text(json.dumps(self._meta, separators = (",", ":")), encoding = "utf-8")
-        _ensure_mode_600(self._meta_path)
+        _atomic_write_text(
+            self._meta_path,
+            json.dumps(self._meta, separators = (",", ":"))
+        )
 
     # ---------- low-level key file helpers ----------
     def _key_file_path(self, key_id: UUID) -> Path:
@@ -313,6 +328,8 @@ class FileKeyStore:
         """
         if self._master_key is None:
             raise ValueError(self.__not_load_mastk)
+        if blob.get("enc") != "aesgcm":
+            raise ValueError("unsupported encryption algorithm")
         aesgcm = AESGCM(self._master_key)
         nonce = _unb64(blob["nonce"])
         ct = _unb64(blob["ciphertext"])
@@ -379,8 +396,10 @@ class FileKeyStore:
         blob = self._encrypt_with_master(key_bytes)
         blob["meta"] = meta
         path = self._key_file_path(key_id)
-        path.write_text(json.dumps(blob, separators = (",", ":")), encoding = "utf-8")
-        _ensure_mode_600(path)
+        _atomic_write_text(
+            path,
+            json.dumps(blob, separators = (",", ":"))
+        )
         if self._meta.get("active_key") is None:
             self._meta["active_key"] = key_id.hex
             self._write_meta()
@@ -402,8 +421,10 @@ class FileKeyStore:
         blob = self._encrypt_with_master(key_bytes)
         blob["meta"] = meta
         path = self._key_file_path(key_id)
-        path.write_text(json.dumps(blob, separators = (",", ":")), encoding = "utf-8")
-        _ensure_mode_600(path)
+        _atomic_write_text(
+            path,
+            json.dumps(blob, separators = (",", ":"))
+        )
 
     def get_key(self, key_id: keys_mod.KeyId | str | bytes) -> Tuple[bytes, Dict[str, Any]]:
         """
@@ -487,3 +508,22 @@ class FileKeyStore:
         if key_id is None:
             return None
         return self.get_key(key_id)
+
+    def wipe_master(self) -> None:
+        """
+        Attempt to wipe the master key from memory.
+        """
+        if self._master_key is None:
+            return
+        try:
+            buf = bytearray(self._master_key)
+            for i in range(len(buf)):
+                buf[i] = 0
+        finally:
+            self._master_key = None
+
+    def close(self) -> None:
+        """
+        Close the keystore and wipe sensitive material from memory.
+        """
+        self.wipe_master()
