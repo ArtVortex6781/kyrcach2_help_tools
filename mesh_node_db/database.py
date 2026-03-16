@@ -41,22 +41,26 @@ class NodeDB:
 
     SCHEMA_VERSION = 1
 
-    _SCHEMA_SQL = """
+    _CREATE_SCHEMA_VERSION_SQL = """
     CREATE TABLE IF NOT EXISTS schema_version (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         version INTEGER NOT NULL
-    );
+    )
+    """
 
+    _CREATE_MESSAGES_SQL = """
     CREATE TABLE IF NOT EXISTS messages (
         message_id TEXT PRIMARY KEY,
         chat_id TEXT NOT NULL,
         sender_id TEXT NOT NULL,
         payload BLOB NOT NULL,
         created_at INTEGER NOT NULL
-    );
+    )
+    """
 
+    _CREATE_MESSAGES_INDEX_SQL = """
     CREATE INDEX IF NOT EXISTS idx_messages_chat_created_message
-    ON messages(chat_id, created_at, message_id);
+    ON messages(chat_id, created_at, message_id)
     """
 
     def __init__(self, path: str, journal_mode: str = "WAL", synchronous: str = "NORMAL") -> None:
@@ -140,7 +144,9 @@ class NodeDB:
         self._require_open()
         try:
             with self._transaction() as cur:
-                cur.executescript(self._SCHEMA_SQL)
+                cur.execute(self._CREATE_SCHEMA_VERSION_SQL)
+                cur.execute(self._CREATE_MESSAGES_SQL)
+                cur.execute(self._CREATE_MESSAGES_INDEX_SQL)
                 row = cur.execute(
                     "SELECT version FROM schema_version WHERE id = 1"
                 ).fetchone()
