@@ -1,82 +1,75 @@
 from __future__ import annotations
+
 import sqlite3
-import json
 import time
-from typing import Any, Mapping, Optional, Sequence, Tuple, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-import logging
+from typing import Callable, Optional, TypeVar
 
-logger = logging.getLogger("mesh_node_db")
-logger.setLevel(logging.INFO)
+__all__ = ["NodeDB", "MessageRecord", "NodeDBError"]
 
-
-class CryptoEngineProtocol:
-    """Protocol/duck-typing for crypto engine used by NodeDB."""
-
-    def encrypt(self, plaintext: bytes) -> bytes: ...
-
-    def decrypt(self, ciphertext: bytes) -> bytes: ...
+T = TypeVar("T")
 
 
 class NodeDBError(Exception):
     """Base error for NodeDB operations."""
 
 
-@dataclass
-class Entity:
-    """In-memory representation returned by read/iter methods."""
-    id: str
-    kind: Optional[str]
-    data: dict
+@dataclass(frozen = True)
+class MessageRecord:
+    """In-memory representation returned by read/list methods."""
+
+    message_id: str
+    chat_id: str
+    sender_id: str
+    payload: bytes
     created_at: int
-    updated_at: int
 
 
 class NodeDB:
     """
-    Lightweight, self-contained storage layer.
-    - Uses sqlite3.
-    - Stores JSON-serializable 'data' per entity (in a BLOB/text column).
-    - Optionally encrypts the stored blob via a provided crypto engine.
+    Minimal abstract local storage layer for Phase 1.
+
     Responsibilities:
-    - open/close DB
-    - create/read/update/delete entities
-    - batch_write and iteration
-    - simple migrations (manual SQL files in migrations/)
-    """
-    DEFAULT_SCHEMA = """
-    CREATE TABLE IF NOT EXISTS schema_version (
-        version INTEGER PRIMARY KEY
-    );
-    CREATE TABLE IF NOT EXISTS entities (
-        id TEXT PRIMARY KEY,
-        kind TEXT,
-        created_at INTEGER,
-        updated_at INTEGER,
-        data BLOB
-    );
-    CREATE INDEX IF NOT EXISTS idx_entities_kind ON entities(kind);
-    CREATE TABLE IF NOT EXISTS errors (
-        error_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ts INTEGER,
-        op TEXT,
-        entity_id TEXT,
-        error_text TEXT
-    );
+    - open/close SQLite connection
+    - initialize/bootstrap schema
+    - expose a small storage-oriented public API
+    - store and read minimal immutable message records
+    - provide explicit transaction boundaries
+    - prepare schema versioning for future migrations
     """
 
-    def __init__(self, path: str, crypto: Optional[CryptoEngineProtocol] = None, journal_mode: str = "WAL") -> None:
+    SCHEMA_VERSION = 1
+
+    _SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS schema_version (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+        message_id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        payload BLOB NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_messages_chat_created_message
+    ON messages(chat_id, created_at, message_id);
+    """
+
+    def __init__(self, path: str, journal_mode: str = "WAL", synchronous: str = "NORMAL") -> None:
         """
-        :param path: sqlite file path
-        :param crypto: optional object with encrypt/decrypt(bytes) -> bytes
-        :param journal_mode: PRAGMA journal_mode value
+        :param path: SQLite file path.
+        :param journal_mode: PRAGMA journal_mode value.
+        :param synchronous: PRAGMA synchronous value.
         """
         self._path = path
-        self._crypto = crypto
-        self._conn: Optional[sqlite3.Connection] = None
         self._journal_mode = journal_mode
-        self._foreign_keys: bool = False
+        self._synchronous = synchronous
+        self._conn: Optional[sqlite3.Connection] = None
+        self._initialized: bool = False
 
     # -----------------------
     # connection management
@@ -85,198 +78,327 @@ class NodeDB:
     def _require_open(self) -> None:
         """
         Ensure that the database connection is initialized and open.
-        Raises NodeDBError If the database connection has not been opened.
+        Raises NodeDBError if the database connection has not been opened.
         """
-        if not self._conn:
+        if self._conn is None:
             raise NodeDBError("Database connection is not open.")
 
+    def _require_initialized(self) -> None:
+        """
+        Ensure that the database connection is open and schema is initialized.
+        Raises NodeDBError if initialize() has not been called yet.
+        """
+        self._require_open()
+        if not self._initialized:
+            raise NodeDBError("Database schema is not initialized. Call initialize() first.")
+
     def open(self, timeout: float = 5.0) -> None:
-        """Open connection and ensure base schema / PRAGMAs."""
-        if self._conn:
+        """
+        Open SQLite connection and configure connection-level PRAGMAs.
+        This method opens the database connection only. Schema bootstrap is kept
+        explicit and is performed by initialize().
+        """
+        if self._conn is not None:
             return
-        self._conn = sqlite3.connect(self._path, timeout = timeout, isolation_level = None)
-        self._conn.execute(f"PRAGMA journal_mode = {self._journal_mode};")
-        self._conn.execute("PRAGMA synchronous = NORMAL;")
-        if self._foreign_keys:
-            self._conn.execute("PRAGMA foreign_keys = ON;")
-        self._ensure_schema()
+        try:
+            self._conn = sqlite3.connect(
+                self._path,
+                timeout = timeout,
+                isolation_level = None,
+            )
+            self._conn.row_factory = sqlite3.Row
+            self._configure_connection()
+        except sqlite3.Error as exc:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+            raise NodeDBError(f"Failed to open database: {exc}") from exc
 
     def close(self) -> None:
-        if not self._conn:
+        """
+        Close the database connection if it is open.
+        """
+        if self._conn is None:
             return
-        self._conn.commit()
-        self._conn.close()
-        self._conn = None
+        try:
+            self._conn.close()
+        except sqlite3.Error as exc:
+            raise NodeDBError(f"Failed to close database: {exc}") from exc
+        finally:
+            self._conn = None
+            self._initialized = False
 
-    def _ensure_schema(self) -> None:
-        """Create default tables if needed. Later, run migration scripts from migrations/."""
+    def initialize(self) -> None:
+        """
+        Bootstrap minimal Phase 1 schema and validate schema version.
+        This method is explicit on purpose:
+        - open() handles connection lifecycle
+        - initialize() handles schema bootstrap and version checks
+        Raises NodeDBError if schema bootstrap fails or an unsupported
+        schema version is detected.
+        """
         self._require_open()
-        cur = self._conn.cursor()
-        cur.executescript(self.DEFAULT_SCHEMA)
-        cur.close()
+        try:
+            with self._transaction() as cur:
+                cur.executescript(self._SCHEMA_SQL)
+                row = cur.execute(
+                    "SELECT version FROM schema_version WHERE id = 1"
+                ).fetchone()
+                if row is None:
+                    cur.execute(
+                        "INSERT INTO schema_version (id, version) VALUES (1, ?)",
+                        (self.SCHEMA_VERSION,),
+                    )
+                    version = self.SCHEMA_VERSION
+                else:
+                    version = int(row["version"])
+        except NodeDBError:
+            raise
+        except sqlite3.Error as exc:
+            raise NodeDBError(f"Failed to initialize database schema: {exc}") from exc
+        if version != self.SCHEMA_VERSION:
+            raise NodeDBError(
+                f"Unsupported schema version: {version}. Expected: {self.SCHEMA_VERSION}."
+            )
+        self._initialized = True
+
+    def get_schema_version(self) -> int:
+        """
+        Return current schema version stored in the database.
+        Raises NodeDBError if the connection is not open or schema_version
+        has not been initialized yet.
+        """
+        self._require_open()
+        try:
+            row = self._conn.execute(
+                "SELECT version FROM schema_version WHERE id = 1"
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise NodeDBError(f"Failed to read schema version: {exc}") from exc
+        if row is None:
+            raise NodeDBError("Schema version is not initialized.")
+        return int(row["version"])
 
     # -----------------------
-    # utility: transactions
+    # public grouped execution
     # -----------------------
+
+    def run_in_transaction(self, fn: Callable[["NodeDB"], T]) -> T:
+        """
+        Execute a group of storage-level operations atomically.
+        The callback receives this NodeDB instance and must use only the public
+        storage API. SQLite's cursors and SQL details are not exposed.
+        Example:
+            db.run_in_transaction(lambda tx: tx.add_message(...))
+        Raises NodeDBError on database-level transaction failure.
+        """
+        self._require_initialized()
+        try:
+            with self._transaction():
+                return fn(self)
+        except NodeDBError:
+            raise
+        except Exception as exc:
+            raise NodeDBError(f"Transactional operation failed: {exc}") from exc
+
+    # -----------------------
+    # minimal storage API
+    # -----------------------
+
+    def add_message(self, message_id: str, chat_id: str, sender_id: str, payload: bytes,
+                    created_at: Optional[int] = None, ) -> None:
+        """
+        Insert one immutable message record.
+
+        :param message_id: stable logical identifier of the message
+        :param chat_id: logical chat identifier
+        :param sender_id: logical sender identifier
+        :param payload: opaque message payload stored as BLOB
+        :param created_at: unix timestamp; current time is used if omitted
+        Raises NodeDBError on invalid input or database failure.
+        """
+        self._require_initialized()
+        if not message_id:
+            raise NodeDBError("message_id must not be empty.")
+        if not chat_id:
+            raise NodeDBError("chat_id must not be empty.")
+        if not sender_id:
+            raise NodeDBError("sender_id must not be empty.")
+        if not isinstance(payload, (bytes, bytearray)):
+            raise NodeDBError("payload must be bytes-like.")
+        ts = int(time.time()) if created_at is None else int(created_at)
+        try:
+            self._conn.execute(
+                """
+                INSERT INTO messages (
+                    message_id,
+                    chat_id,
+                    sender_id,
+                    payload,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (message_id, chat_id, sender_id, bytes(payload), ts),
+            )
+        except sqlite3.Error as exc:
+            raise NodeDBError(f"Failed to add message: {exc}") from exc
+
+    def get_message(self, message_id: str) -> Optional[MessageRecord]:
+        """
+        Read one message by message_id.
+
+        :param message_id: stable logical identifier of the message
+        :return: MessageRecord or None if not found
+        Raises NodeDBError on invalid state or database failure.
+        """
+        self._require_initialized()
+        if not message_id:
+            raise NodeDBError("message_id must not be empty.")
+        try:
+            row = self._conn.execute(
+                """
+                SELECT message_id, chat_id, sender_id, payload, created_at
+                FROM messages
+                WHERE message_id = ?
+                """,
+                (message_id,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise NodeDBError(f"Failed to read message: {exc}") from exc
+        if row is None:
+            return None
+        return self._row_to_message(row)
+
+    def list_chat_messages(self, chat_id: str, limit: int = 100, before_created_at: Optional[int] = None,
+                           before_message_id: Optional[str] = None) -> list[MessageRecord]:
+        """
+        List messages for one chat ordered from newest to oldest.
+
+        Pagination model:
+        - first page: pass only chat_id and optional limit
+        - next page: pass both before_created_at and before_message_id
+          from the last record of the previous page
+
+        :param chat_id: logical chat identifier
+        :param limit: maximum number of records to return
+        :param before_created_at: pagination cursor timestamp
+        :param before_message_id: pagination cursor message id
+        :return: list of MessageRecord
+        Raises NodeDBError on invalid input or database failure.
+        """
+        self._require_initialized()
+        if not chat_id:
+            raise NodeDBError("chat_id must not be empty.")
+        self._validate_limit(limit)
+        try:
+            if before_created_at is None and before_message_id is None:
+                rows = self._conn.execute(
+                    """
+                    SELECT message_id, chat_id, sender_id, payload, created_at
+                    FROM messages
+                    WHERE chat_id = ?
+                    ORDER BY created_at DESC, message_id DESC
+                    LIMIT ?
+                    """,
+                    (chat_id, limit),
+                ).fetchall()
+            elif before_created_at is not None and before_message_id is not None:
+                rows = self._conn.execute(
+                    """
+                    SELECT message_id, chat_id, sender_id, payload, created_at
+                    FROM messages
+                    WHERE chat_id = ?
+                      AND (
+                          created_at < ?
+                          OR (created_at = ? AND message_id < ?)
+                      )
+                    ORDER BY created_at DESC, message_id DESC
+                    LIMIT ?
+                    """,
+                    (
+                        chat_id,
+                        int(before_created_at),
+                        int(before_created_at),
+                        before_message_id,
+                        limit,
+                    ),
+                ).fetchall()
+            else:
+                raise NodeDBError(
+                    "Pagination requires both before_created_at and before_message_id, or neither."
+                )
+        except NodeDBError:
+            raise
+        except sqlite3.Error as exc:
+            raise NodeDBError(f"Failed to list chat messages: {exc}") from exc
+        return [self._row_to_message(row) for row in rows]
+
+    # -----------------------
+    # internal helpers
+    # -----------------------
+
     @contextmanager
-    def transaction(self):
-        """Simple transaction context manager: BEGIN / COMMIT / ROLLBACK and basic error logging."""
+    def _transaction(self):
+        """
+        Internal transaction context manager: BEGIN / COMMIT / ROLLBACK.
+
+        This helper is intentionally private so SQLite transaction details do not
+        leak through the public API.
+        """
         self._require_open()
         cur = self._conn.cursor()
         try:
             cur.execute("BEGIN;")
             yield cur
             cur.execute("COMMIT;")
-        except Exception as e:
-            cur.execute("ROLLBACK;")
+        except sqlite3.Error as exc:
             try:
-                ts = int(time.time())
-                self._conn.execute(
-                    "INSERT INTO errors (ts, op, entity_id, error_text) VALUES (?, ?, ?, ?)",
-                    (ts, getattr(e, "op", "unknown"), None, repr(e)),
-                    # TODO(#1): Чтобы передовалось имя операции (создать/обновить/удалить) в функцию transaction()
-                    #  и записать его в errors.op вместо "unknown"
-                )
-                self._conn.commit()
-            except Exception:
+                cur.execute("ROLLBACK;")
+            except sqlite3.Error:
+                pass
+            raise NodeDBError(f"Database transaction failed: {exc}") from exc
+        except Exception:
+            try:
+                cur.execute("ROLLBACK;")
+            except sqlite3.Error:
                 pass
             raise
+        finally:
+            cur.close()
 
-    # -----------------------
-    # CRUD API
-    # -----------------------
-
-    def create(self, entity_id: str, data: Mapping[str, Any], kind: Optional[str] = None) -> None:
-        """Create a new entity. Raises NodeDBError if exists."""
-        now = int(time.time())
-        payload = json.dumps(data, separators = (",", ":"), ensure_ascii = False).encode()
-        if self._crypto:
-            payload = self._crypto.encrypt(payload)
-        with self.transaction() as cur:
-            cur.execute(
-                "INSERT INTO entities (id, kind, created_at, updated_at, data) VALUES (?, ?, ?, ?, ?)",
-                (entity_id, kind, now, now, payload),
-            )
-
-    def read(self, entity_id: str) -> Optional[Entity]:
-        """Read entity by id; returns Entity or None if not found."""
-        self._require_open()
-        cur = self._conn.cursor()
-        cur.execute("SELECT id, kind, created_at, updated_at, data FROM entities WHERE id = ?", (entity_id,))
-        row = cur.fetchone()
-        cur.close()
-        if not row:
-            return None
-        raw = row[4]
-        if self._crypto and raw is not None:
-            raw = self._crypto.decrypt(raw)
-        data = json.loads(raw.decode()) if raw is not None else {}
-        return Entity(id = row[0], kind = row[1], created_at = row[2], updated_at = row[3], data = data)
-
-    def update(self, entity_id: str, fields: Mapping[str, Any]) -> None:
-        """Partial update: merges provided fields into existing dict. Raises if not found."""
-        existing = self.read(entity_id)
-        if existing is None:
-            raise NodeDBError("Entity not found")
-        merged = {**existing.data, **fields}
-        now = int(time.time())
-        payload = json.dumps(merged, separators = (",", ":"), ensure_ascii = False).encode()
-        if self._crypto:
-            payload = self._crypto.encrypt(payload)
-        with self.transaction() as cur:
-            cur.execute(
-                "UPDATE entities SET data = ?, updated_at = ? WHERE id = ?",
-                (payload, now, entity_id),
-            )
-
-    def delete(self, entity_id: str) -> None:
-        with self.transaction() as cur:
-            cur.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
-
-    # -----------------------
-    # batch write and iteration
-    # -----------------------
-
-    def batch_write(self, items: Sequence[Tuple[str, Optional[str], Mapping[str, Any]]]) -> None:
+    def _configure_connection(self) -> None:
         """
-        :param items: sequence of (entity_id, kind, data)
-        Performs one transaction with multiple inserts/updates (upsert).
+        Configure SQLite connection PRAGMAs for the minimal Phase 1 storage layer.
         """
-        now = int(time.time())
-        with self.transaction() as cur:
-            for entity_id, kind, data in items:
-                payload = json.dumps(data, separators = (",", ":"), ensure_ascii = False).encode()
-                if self._crypto:
-                    payload = self._crypto.encrypt(payload)
-                cur.execute(
-                    """
-                    INSERT INTO entities (id, kind, created_at, updated_at, data)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                      kind=excluded.kind,
-                      updated_at=excluded.updated_at,
-                      data=excluded.data
-                    """,
-                    (entity_id, kind, now, now, payload),
-                )
-
-    def iter_all(self, strict: bool = True) -> Iterator[Entity]:
-        """
-        An iterator on all entities in the database.
-        :param strict: if True, when corrupted data is detected, decryption error or invalid JSON
-        The function throws an exception. If False, such entries are skipped.
-
-        :return: Entity objects with the id, kind, data, created_at, updated_at fields.
-        """
-        self._require_open()
-        cur = self._conn.execute("""SELECT id, kind, data, created_at, updated_at FROM entities ORDER BY created_at""")
-        for entity_id, kind, raw, created_at, updated_at in cur:
-            try:
-                if self._crypto:
-                    raw = self._crypto.decrypt(raw)
-                data = json.loads(raw.decode("utf-8"))
-            except Exception as e:
-                logger.error(
-                    "Corrupted entity detected: id = %s, error = %s",
-                    entity_id,
-                    str(e),
-                )
-                if strict:
-                    raise
-                continue
-            yield Entity(
-                id = entity_id,
-                kind = kind,
-                data = data,
-                created_at = created_at,
-                updated_at = updated_at,
-            )
-
-    # -----------------------
-    # utilities
-    # -----------------------
-
-    def backup(self, dest_path: str) -> None:
-        """Create a sqlite backup file (online backup)."""
-        self._require_open()
-        dest_conn = sqlite3.connect(dest_path)
-        with dest_conn:
-            self._conn.backup(dest_conn)
-        dest_conn.close()
-
-    def run_migration_script(self, sql: str) -> None:
-        """Apply a manual migration SQL script (str)."""
         self._require_open()
         try:
-            self._conn.executescript(sql)
-        except Exception as e:
-            try:
-                ts = int(time.time())
-                self._conn.execute(
-                    "INSERT INTO errors (ts, op, entity_id, error_text) VALUES (?, ?, ?, ?)",
-                    (ts, "migration", None, repr(e)),
-                )
-                self._conn.commit()
-            except Exception:
-                pass
-            raise
+            self._conn.execute(f"PRAGMA journal_mode = {self._journal_mode};")
+            self._conn.execute(f"PRAGMA synchronous = {self._synchronous};")
+            self._conn.execute("PRAGMA foreign_keys = ON;")
+            self._conn.execute("PRAGMA busy_timeout = 5000;")
+        except sqlite3.Error as exc:
+            raise NodeDBError(f"Failed to configure database connection: {exc}") from exc
+
+    @staticmethod
+    def _row_to_message(row: sqlite3.Row) -> MessageRecord:
+        """
+        Convert one SQLite row into MessageRecord.
+        """
+        return MessageRecord(
+            message_id = str(row["message_id"]),
+            chat_id = str(row["chat_id"]),
+            sender_id = str(row["sender_id"]),
+            payload = bytes(row["payload"]),
+            created_at = int(row["created_at"]),
+        )
+
+    @staticmethod
+    def _validate_limit(limit: int) -> None:
+        """
+        Validate bounded fetch size for list operations.
+        """
+        if limit <= 0:
+            raise NodeDBError("limit must be > 0.")
+        if limit > 1000:
+            raise NodeDBError("limit must be <= 1000.")
