@@ -1,161 +1,396 @@
-import sqlite3
+from __future__ import annotations
+
+import time
+from dataclasses import FrozenInstanceError
+
 import pytest
 
-from mesh_node_db import NodeDB, Entity
+from mesh_node_db import MessageRecord, NodeDB, NodeDBError
 
 
-class DummyCrypto:
-    """Very small deterministic 'crypto' used only for tests."""
-
-    def encrypt(self, plaintext: bytes) -> bytes:
-        return b"ENC:" + plaintext
-
-    def decrypt(self, ciphertext: bytes) -> bytes:
-        if not isinstance(ciphertext, (bytes, bytearray)):
-            raise ValueError("ciphertext not bytes")
-        if not ciphertext.startswith(b"ENC:"):
-            raise ValueError("bad ciphertext")
-        return bytes(ciphertext[4:])
+@pytest.fixture
+def db_path(tmp_path):
+    return tmp_path / "node.db"
 
 
-def test_crud_create_read_update_delete(tmp_path):
-    db_file = tmp_path / "node.db"
-    db = NodeDB(str(db_file))
+@pytest.fixture
+def opened_db(db_path):
+    db = NodeDB(str(db_path))
     db.open()
-
-    db.create("id1", {"name": "Alice", "age": 30}, kind = "user")
-    ent = db.read("id1")
-    assert isinstance(ent, Entity)
-    assert ent.id == "id1"
-    assert ent.kind == "user"
-    assert ent.data["name"] == "Alice"
-    assert ent.data["age"] == 30
-
-    db.update("id1", {"age": 31, "active": True})
-    ent2 = db.read("id1")
-    assert ent2.data["name"] == "Alice"
-    assert ent2.data["age"] == 31
-    assert ent2.data["active"] is True
-
-    db.delete("id1")
-    assert db.read("id1") is None
-
-    db.close()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-def test_create_duplicate_raises(tmp_path):
-    db_file = tmp_path / "node_dup.db"
-    db = NodeDB(str(db_file))
+@pytest.fixture
+def initialized_db(db_path):
+    db = NodeDB(str(db_path))
     db.open()
-    db.create("x", {"v": 1})
-
-    with pytest.raises(sqlite3.IntegrityError):
-        db.create("x", {"v": 2})
-    db.close()
-
-
-def test_batch_write_and_upsert(tmp_path):
-    db_file = tmp_path / "batch.db"
-    db = NodeDB(str(db_file))
-    db.open()
-
-    items = [
-        ("a", "kind1", {"val": 1}),
-        ("b", "kind1", {"val": 2}),
-    ]
-    db.batch_write(items)
-
-    a = db.read("a")
-    b = db.read("b")
-    assert a.data["val"] == 1
-    assert b.data["val"] == 2
-
-    db.batch_write([("a", "kind1", {"val": 100})])
-    a2 = db.read("a")
-    assert a2.data["val"] == 100
-
-    db.close()
+    db.initialize()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-def test_crypto_integration_stores_encrypted_blob(tmp_path):
-    db_file = tmp_path / "crypto.db"
-    crypto = DummyCrypto()
-    db = NodeDB(str(db_file), crypto = crypto)
-    db.open()
-
-    payload = {"msg": "hello"}
-    db.create("c1", payload)
-    ent = db.read("c1")
-    assert ent.data == payload
-
-    conn = sqlite3.connect(str(db_file))
-    cur = conn.cursor()
-    cur.execute("SELECT data FROM entities WHERE id = ?", ("c1",))
-    row = cur.fetchone()
-    conn.close()
-    assert row is not None
-    raw_blob = row[0]
-    assert isinstance(raw_blob, (bytes, bytearray))
-    assert raw_blob.startswith(b"ENC:")
-
-    db.close()
+def add_message(
+    db: NodeDB,
+    message_id: str,
+    chat_id: str = "chat-1",
+    sender_id: str = "user-1",
+    payload: bytes = b"payload",
+    created_at: int | None = None,
+) -> None:
+    db.add_message(
+        message_id = message_id,
+        chat_id = chat_id,
+        sender_id = sender_id,
+        payload = payload,
+        created_at = created_at,
+    )
 
 
-def test_iter_all_strict_false_skips_corrupted(tmp_path):
-    db_file = tmp_path / "iter.db"
-    db = NodeDB(str(db_file))
-    db.open()
+class TestLifecycle:
+    def test_open_creates_database_file_and_is_idempotent(self, db_path) -> None:
+        db = NodeDB(str(db_path))
 
-    db.create("good", {"a": 1})
+        assert not db_path.exists()
 
-    conn = sqlite3.connect(str(db_file))
-    cur = conn.cursor()
-    cur.execute("INSERT INTO entities (id, kind, created_at, updated_at, data) VALUES (?, ?, ?, ?, ?)",
-                ("bad", "kind", 1, 1, b"NOTJSONORDECRYPT"))
-    conn.commit()
-    conn.close()
+        db.open()
+        assert db_path.exists()
 
-    ids = [e.id for e in db.iter_all(strict = False)]
-    assert "good" in ids
-    assert "bad" not in ids
+        db.open()  # must be safe
 
-    with pytest.raises(Exception):
-        list(db.iter_all(strict = True))
+        db.close()
 
-    db.close()
+    def test_close_is_idempotent(self, db_path) -> None:
+        db = NodeDB(str(db_path))
+
+        db.open()
+        db.close()
+        db.close()  # must be safe
+
+    def test_reopen_initialize_again_preserves_data(self, db_path) -> None:
+        db = NodeDB(str(db_path))
+        db.open()
+        db.initialize()
+
+        add_message(
+            db,
+            message_id = "msg-1",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"hello",
+            created_at = 1_700_000_000,
+        )
+
+        db.close()
+
+        db.open()
+        db.initialize()
+
+        assert db.get_schema_version() == NodeDB.SCHEMA_VERSION
+
+        record = db.get_message("msg-1")
+        assert record is not None
+        assert record == MessageRecord(
+            message_id = "msg-1",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"hello",
+            created_at = 1_700_000_000,
+        )
+
+        db.close()
 
 
-def test_backup_creates_file(tmp_path):
-    db_file = tmp_path / "orig.db"
-    dest = tmp_path / "copy.db"
-    db = NodeDB(str(db_file))
-    db.open()
-    db.create("one", {"x": 1})
-    db.backup(str(dest))
-    assert dest.exists()
-    assert dest.stat().st_size > 0
-    conn = sqlite3.connect(str(dest))
-    cur = conn.cursor()
-    cur.execute("SELECT id FROM entities WHERE id = ?", ("one",))
-    assert cur.fetchone() is not None
-    conn.close()
-    db.close()
+class TestSchemaBootstrap:
+    def test_initialize_sets_schema_version_for_new_database(self, opened_db: NodeDB) -> None:
+        opened_db.initialize()
+
+        assert opened_db.get_schema_version() == NodeDB.SCHEMA_VERSION
+
+    def test_initialize_is_idempotent_for_existing_database(self, opened_db: NodeDB) -> None:
+        opened_db.initialize()
+        first_version = opened_db.get_schema_version()
+
+        opened_db.initialize()
+        second_version = opened_db.get_schema_version()
+
+        assert first_version == NodeDB.SCHEMA_VERSION
+        assert second_version == NodeDB.SCHEMA_VERSION
+
+    def test_get_schema_version_raises_if_schema_not_initialized(self, opened_db: NodeDB) -> None:
+        with pytest.raises(NodeDBError):
+            opened_db.get_schema_version()
 
 
-def test_run_migration_script(tmp_path):
-    db_file = tmp_path / "mig.db"
-    db = NodeDB(str(db_file))
-    db.open()
-    sql = """
-    CREATE TABLE IF NOT EXISTS temp_table (
-        tid INTEGER PRIMARY KEY,
-        note TEXT
-    );
-    """
-    db.run_migration_script(sql)
-    conn = sqlite3.connect(str(db_file))
-    cur = conn.cursor()
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='temp_table'")
-    assert cur.fetchone() is not None
-    conn.close()
-    db.close()
+class TestMessageRecord:
+    def test_message_record_creation_and_fields(self) -> None:
+        record = MessageRecord(
+            message_id = "msg-1",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"abc",
+            created_at = 123,
+        )
+
+        assert record.message_id == "msg-1"
+        assert record.chat_id == "chat-1"
+        assert record.sender_id == "alice"
+        assert record.payload == b"abc"
+        assert record.created_at == 123
+
+    def test_message_record_is_frozen(self) -> None:
+        record = MessageRecord(
+            message_id = "msg-1",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"abc",
+            created_at = 123,
+        )
+
+        with pytest.raises(FrozenInstanceError):
+            record.message_id = "msg-2"
+
+
+class TestAddMessage:
+    def test_add_message_persists_and_get_message_returns_same_data(
+        self,
+        initialized_db: NodeDB,
+    ) -> None:
+        add_message(
+            initialized_db,
+            message_id = "msg-1",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"hello",
+            created_at = 1_700_000_000,
+        )
+
+        record = initialized_db.get_message("msg-1")
+
+        assert record is not None
+        assert record == MessageRecord(
+            message_id = "msg-1",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"hello",
+            created_at = 1_700_000_000,
+        )
+
+    def test_add_message_duplicate_message_id_raises(self, initialized_db: NodeDB) -> None:
+        add_message(initialized_db, message_id = "msg-1")
+
+        with pytest.raises(NodeDBError):
+            add_message(initialized_db, message_id = "msg-1")
+
+    def test_add_message_sets_created_at_automatically(self, initialized_db: NodeDB) -> None:
+        before = int(time.time())
+        add_message(
+            initialized_db,
+            message_id = "msg-auto-ts",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"hello",
+        )
+        after = int(time.time())
+
+        record = initialized_db.get_message("msg-auto-ts")
+
+        assert record is not None
+        assert before <= record.created_at <= after
+
+    def test_payload_roundtrip_is_bytes_and_unchanged(self, initialized_db: NodeDB) -> None:
+        payload = b"\x00\x01\x02binary\xffdata"
+
+        add_message(
+            initialized_db,
+            message_id = "msg-binary",
+            payload = payload,
+        )
+
+        record = initialized_db.get_message("msg-binary")
+
+        assert record is not None
+        assert isinstance(record.payload, bytes)
+        assert record.payload == payload
+
+
+class TestGetMessage:
+    def test_get_existing_message_returns_message_record(self, initialized_db: NodeDB) -> None:
+        add_message(
+            initialized_db,
+            message_id = "msg-1",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"hello",
+            created_at = 42,
+        )
+
+        record = initialized_db.get_message("msg-1")
+
+        assert record == MessageRecord(
+            message_id = "msg-1",
+            chat_id = "chat-1",
+            sender_id = "alice",
+            payload = b"hello",
+            created_at = 42,
+        )
+
+    def test_get_missing_message_returns_none(self, initialized_db: NodeDB) -> None:
+        assert initialized_db.get_message("missing") is None
+
+
+class TestListChatMessages:
+    def test_list_chat_messages_returns_only_requested_chat(self, initialized_db: NodeDB) -> None:
+        add_message(initialized_db, message_id = "a1", chat_id = "chat-a", created_at = 10)
+        add_message(initialized_db, message_id = "a2", chat_id = "chat-a", created_at = 20)
+        add_message(initialized_db, message_id = "b1", chat_id = "chat-b", created_at = 30)
+
+        records = initialized_db.list_chat_messages("chat-a")
+
+        assert [record.message_id for record in records] == ["a2", "a1"]
+        assert all(record.chat_id == "chat-a" for record in records)
+
+    def test_list_chat_messages_orders_by_created_at_desc_then_message_id_desc(
+        self,
+        initialized_db: NodeDB,
+    ) -> None:
+        add_message(initialized_db, message_id = "a", chat_id = "chat-1", created_at = 100)
+        add_message(initialized_db, message_id = "c", chat_id = "chat-1", created_at = 200)
+        add_message(initialized_db, message_id = "b", chat_id = "chat-1", created_at = 200)
+        add_message(initialized_db, message_id = "d", chat_id = "chat-1", created_at = 50)
+
+        records = initialized_db.list_chat_messages("chat-1")
+
+        assert [record.message_id for record in records] == ["c", "b", "a", "d"]
+
+    def test_list_chat_messages_limit_restricts_result_size(self, initialized_db: NodeDB) -> None:
+        add_message(initialized_db, message_id = "m1", created_at = 1)
+        add_message(initialized_db, message_id = "m2", created_at = 2)
+        add_message(initialized_db, message_id = "m3", created_at = 3)
+
+        records = initialized_db.list_chat_messages("chat-1", limit = 2)
+
+        assert len(records) == 2
+        assert [record.message_id for record in records] == ["m3", "m2"]
+
+    @pytest.mark.parametrize("bad_limit", [0, -1, -100, 1001])
+    def test_list_chat_messages_invalid_limit_raises(
+        self,
+        initialized_db: NodeDB,
+        bad_limit: int,
+    ) -> None:
+        with pytest.raises(NodeDBError):
+            initialized_db.list_chat_messages("chat-1", limit = bad_limit)
+
+    def test_list_chat_messages_pagination_returns_non_overlapping_pages(
+        self,
+        initialized_db: NodeDB,
+    ) -> None:
+        add_message(initialized_db, message_id = "a", chat_id = "chat-1", created_at = 198)
+        add_message(initialized_db, message_id = "z", chat_id = "chat-1", created_at = 199)
+        add_message(initialized_db, message_id = "b", chat_id = "chat-1", created_at = 200)
+        add_message(initialized_db, message_id = "c", chat_id = "chat-1", created_at = 200)
+
+        page_1 = initialized_db.list_chat_messages("chat-1", limit = 2)
+        assert [record.message_id for record in page_1] == ["c", "b"]
+
+        cursor = page_1[-1]
+        page_2 = initialized_db.list_chat_messages(
+            "chat-1",
+            limit = 2,
+            before_created_at = cursor.created_at,
+            before_message_id = cursor.message_id,
+        )
+
+        assert [record.message_id for record in page_2] == ["z", "a"]
+
+        page_1_ids = {record.message_id for record in page_1}
+        page_2_ids = {record.message_id for record in page_2}
+        assert page_1_ids.isdisjoint(page_2_ids)
+
+    def test_list_chat_messages_requires_both_pagination_cursor_fields(
+        self,
+        initialized_db: NodeDB,
+    ) -> None:
+        with pytest.raises(NodeDBError):
+            initialized_db.list_chat_messages(
+                "chat-1",
+                before_created_at = 123,
+            )
+
+        with pytest.raises(NodeDBError):
+            initialized_db.list_chat_messages(
+                "chat-1",
+                before_message_id = "msg-1",
+            )
+
+
+class TestTransactions:
+    def test_run_in_transaction_commits_successful_operation(self, initialized_db: NodeDB) -> None:
+        initialized_db.run_in_transaction(
+            lambda tx: tx.add_message(
+                message_id = "msg-1",
+                chat_id = "chat-1",
+                sender_id = "alice",
+                payload = b"hello",
+                created_at = 123,
+            )
+        )
+
+        record = initialized_db.get_message("msg-1")
+        assert record is not None
+        assert record.message_id == "msg-1"
+
+    def test_run_in_transaction_rolls_back_on_error(self, initialized_db: NodeDB) -> None:
+        def failing_operation(tx: NodeDB) -> None:
+            tx.add_message(
+                message_id = "msg-rollback",
+                chat_id = "chat-1",
+                sender_id = "alice",
+                payload = b"hello",
+                created_at = 123,
+            )
+            raise RuntimeError("boom")
+
+        with pytest.raises(NodeDBError):
+            initialized_db.run_in_transaction(failing_operation)
+
+        assert initialized_db.get_message("msg-rollback") is None
+
+
+class TestStateErrors:
+    def test_operations_without_open_raise(self, db_path) -> None:
+        db = NodeDB(str(db_path))
+
+        with pytest.raises(NodeDBError):
+            db.add_message(
+                message_id = "msg-1",
+                chat_id = "chat-1",
+                sender_id = "alice",
+                payload = b"hello",
+            )
+
+        with pytest.raises(NodeDBError):
+            db.get_message("msg-1")
+
+        with pytest.raises(NodeDBError):
+            db.list_chat_messages("chat-1")
+
+    def test_operations_without_initialize_raise(self, opened_db: NodeDB) -> None:
+        with pytest.raises(NodeDBError):
+            opened_db.add_message(
+                message_id = "msg-1",
+                chat_id = "chat-1",
+                sender_id = "alice",
+                payload = b"hello",
+            )
+
+        with pytest.raises(NodeDBError):
+            opened_db.get_message("msg-1")
+
+        with pytest.raises(NodeDBError):
+            opened_db.list_chat_messages("chat-1")
