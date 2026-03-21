@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mesh_crypto.core import KeyIdHelpers
+from mesh_crypto.core import KeyIdHelpers, KeyId
 from mesh_crypto.errors import InvalidKeyError
-from mesh_crypto.core import KeyId
 
 
 class TestNewKeyId:
