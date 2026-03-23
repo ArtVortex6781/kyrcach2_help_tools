@@ -35,12 +35,12 @@ def initialized_db(db_path):
 
 
 def add_message(
-    db: NodeDB,
-    message_id: str,
-    chat_id: str = "chat-1",
-    sender_id: str = "user-1",
-    payload: bytes = b"payload",
-    created_at: int | None = None,
+        db: NodeDB,
+        message_id: str,
+        chat_id: str = "chat-1",
+        sender_id: str = "user-1",
+        payload: bytes = b"payload",
+        created_at: int | None = None,
 ) -> None:
     db.add_message(
         message_id = message_id,
@@ -157,8 +157,8 @@ class TestMessageRecord:
 
 class TestAddMessage:
     def test_add_message_persists_and_get_message_returns_same_data(
-        self,
-        initialized_db: NodeDB,
+            self,
+            initialized_db: NodeDB,
     ) -> None:
         add_message(
             initialized_db,
@@ -255,8 +255,8 @@ class TestListChatMessages:
         assert all(record.chat_id == "chat-a" for record in records)
 
     def test_list_chat_messages_orders_by_created_at_desc_then_message_id_desc(
-        self,
-        initialized_db: NodeDB,
+            self,
+            initialized_db: NodeDB,
     ) -> None:
         add_message(initialized_db, message_id = "a", chat_id = "chat-1", created_at = 100)
         add_message(initialized_db, message_id = "c", chat_id = "chat-1", created_at = 200)
@@ -279,16 +279,16 @@ class TestListChatMessages:
 
     @pytest.mark.parametrize("bad_limit", [0, -1, -100, 1001])
     def test_list_chat_messages_invalid_limit_raises(
-        self,
-        initialized_db: NodeDB,
-        bad_limit: int,
+            self,
+            initialized_db: NodeDB,
+            bad_limit: int,
     ) -> None:
         with pytest.raises(NodeDBError):
             initialized_db.list_chat_messages("chat-1", limit = bad_limit)
 
     def test_list_chat_messages_pagination_returns_non_overlapping_pages(
-        self,
-        initialized_db: NodeDB,
+            self,
+            initialized_db: NodeDB,
     ) -> None:
         add_message(initialized_db, message_id = "a", chat_id = "chat-1", created_at = 198)
         add_message(initialized_db, message_id = "z", chat_id = "chat-1", created_at = 199)
@@ -313,8 +313,8 @@ class TestListChatMessages:
         assert page_1_ids.isdisjoint(page_2_ids)
 
     def test_list_chat_messages_requires_both_pagination_cursor_fields(
-        self,
-        initialized_db: NodeDB,
+            self,
+            initialized_db: NodeDB,
     ) -> None:
         with pytest.raises(NodeDBError):
             initialized_db.list_chat_messages(
