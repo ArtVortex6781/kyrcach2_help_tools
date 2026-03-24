@@ -23,6 +23,8 @@ def derive_key_scrypt(password: bytes, salt: bytes, *, length: int = 32,
     :return: Derived key bytes.
     :raises InvalidKeyError: If inputs or KDF parameters are invalid.
     """
+    if not isinstance(length, int) or length <= 0:
+        raise InvalidKeyError("length must be a positive integer")
     try:
         kdf = Scrypt(
             salt = salt,
@@ -37,7 +39,7 @@ def derive_key_scrypt(password: bytes, salt: bytes, *, length: int = 32,
 
 
 def derive_key_hkdf(secret: bytes, *, salt: bytes | None = None,
-                    info: bytes = b"", length: int = 32) -> bytes:
+                    info: bytes | None = b"", length: int = 32) -> bytes:
     """
     Derive key material from input secret bytes using HKDF-SHA256.
 
@@ -48,6 +50,10 @@ def derive_key_hkdf(secret: bytes, *, salt: bytes | None = None,
     :return: Derived key bytes.
     :raises InvalidKeyError: If inputs or HKDF parameters are invalid.
     """
+    if info is not None and not isinstance(info, bytes):
+        raise InvalidKeyError("info must be bytes or None")
+    if not isinstance(length, int) or length <= 0:
+        raise InvalidKeyError("length must be a positive integer")
     try:
         kdf = HKDF(
             algorithm = hashes.SHA256(),
