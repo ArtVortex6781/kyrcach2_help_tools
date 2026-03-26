@@ -4,16 +4,39 @@ import base64
 from dataclasses import dataclass
 from typing import Any
 
-from ..errors import InvalidKeyError, UnsupportedFormatError
+from ..errors import InvalidInputError, MalformedDataError, UnsupportedFormatError
 
 __all__ = ["AeadEnvelope", "WrappedKeyEnvelope"]
+
+_AEAD_ALGORITHMS = {"aesgcm"}
+_WRAPPED_KEY_ALGORITHMS = {"aesgcm"}
+_KDF_IDS = {"scrypt"}
+_WRAPPED_KEY_PURPOSES = {"private_key", "seed", "session_key"}
+
+_AEAD_KEYS = {"version", "algorithm", "nonce", "ciphertext"}
+_WRAPPED_KEY_KEYS = {
+    "version",
+    "algorithm",
+    "nonce",
+    "ciphertext",
+    "kdf",
+    "kdf_salt",
+    "kdf_params",
+    "purpose",
+}
+_WRAPPED_BASE_KEY_KEYS = {"version", "algorithm", "nonce", "ciphertext", "purpose"}
+
+_AESGCM_NONCE_LEN = 12
+_AESGCM_TAG_LEN = 16
+_SCRYPT_MIN_SALT_LEN = 16
+_SCRYPT_REQUIRED_PARAMS = {"n", "r", "p"}
 
 
 def _b64_encode(data: bytes) -> str:
     """
-    Encode raw bytes as base64 ASCII string.
+    Encode raw bytes as a base64 ASCII string.
 
-    :param data: Raw bytes.
+    :param data: Raw bytes to encode.
     :return: Base64-encoded ASCII string.
     """
     return base64.b64encode(data).decode("ascii")
@@ -21,17 +44,63 @@ def _b64_encode(data: bytes) -> str:
 
 def _b64_decode(data: str, *, field_name: str) -> bytes:
     """
-    Decode base64 ASCII string into raw bytes.
+    Decode a base64 ASCII string into raw bytes.
 
     :param data: Base64-encoded ASCII string.
-    :param field_name: Field name used for error reporting.
+    :param field_name: Field name used in error messages.
     :return: Decoded raw bytes.
-    :raises InvalidKeyError: If the value is not valid base64 text.
+    :raises MalformedDataError: If the value is not valid base64 text.
     """
     try:
         return base64.b64decode(data.encode("ascii"), validate = True)
     except Exception as exc:
-        raise InvalidKeyError(f"invalid base64 value for '{field_name}'") from exc
+        raise MalformedDataError(f"invalid base64 value for '{field_name}'") from exc
+
+
+def _require_required_keys(data: dict[str, Any], required_keys: set[str], *, schema_name: str) -> None:
+    """
+    Validate that a mapping contains all required keys.
+
+    :param data: Source mapping.
+    :param required_keys: Required key set.
+    :param schema_name: Human-readable schema name used in error messages.
+    :raises MalformedDataError: If required keys are missing.
+    """
+    actual_keys = set(data.keys())
+    missing = required_keys - actual_keys
+
+    if missing:
+        raise MalformedDataError(
+            f"{schema_name} missing keys: {sorted(missing)}"
+        )
+
+
+def _require_allowed_keys(data: dict[str, Any], allowed_keys: set[str], *, schema_name: str) -> None:
+    """
+    Validate that a mapping does not contain unexpected keys.
+
+    :param data: Source mapping.
+    :param allowed_keys: Allowed key set.
+    :param schema_name: Human-readable schema name used in error messages.
+    :raises MalformedDataError: If unexpected keys are present.
+    """
+    actual_keys = set(data.keys())
+    extra = actual_keys - allowed_keys
+    if extra:
+        raise MalformedDataError(f"{schema_name} contains unexpected keys: {sorted(extra)}")
+
+
+def _require_exact_keys(data: dict[str, Any], expected_keys: set[str], *, schema_name: str) -> None:
+    """
+    Validate that a mapping contains exactly the expected keys.
+
+    :param data: Source mapping.
+    :param expected_keys: Allowed and required key set.
+    :param schema_name: Human-readable schema name used in error messages.
+    :raises MalformedDataError: If keys are missing or unexpected.
+    """
+    _require_allowed_keys(data, expected_keys, schema_name = schema_name)
+    _require_required_keys(data, expected_keys, schema_name = schema_name)
 
 
 def _require_int(data: dict[str, Any], field_name: str) -> int:
@@ -41,11 +110,11 @@ def _require_int(data: dict[str, Any], field_name: str) -> int:
     :param data: Source mapping.
     :param field_name: Required field name.
     :return: Integer field value.
-    :raises UnsupportedFormatError: If the field is missing or not an integer.
+    :raises MalformedDataError: If the field is missing or is not a strict int.
     """
     value = data.get(field_name)
-    if not isinstance(value, int):
-        raise UnsupportedFormatError(f"missing or invalid integer field '{field_name}'")
+    if type(value) is not int:
+        raise MalformedDataError(f"missing or invalid integer field '{field_name}'")
     return value
 
 
@@ -56,11 +125,11 @@ def _require_str(data: dict[str, Any], field_name: str) -> str:
     :param data: Source mapping.
     :param field_name: Required field name.
     :return: String field value.
-    :raises UnsupportedFormatError: If the field is missing or not a string.
+    :raises MalformedDataError: If the field is missing or is not a string.
     """
     value = data.get(field_name)
     if not isinstance(value, str):
-        raise UnsupportedFormatError(f"missing or invalid string field '{field_name}'")
+        raise MalformedDataError(f"missing or invalid string field '{field_name}'")
     return value
 
 
@@ -75,28 +144,119 @@ def _validate_version(version: int) -> None:
         raise UnsupportedFormatError(f"unsupported envelope version: {version}")
 
 
-def _validate_common_envelope_fields(*, version: int, algorithm: str, expected_algorithm: str,
-                                     nonce: bytes, ciphertext: bytes) -> None:
+def _validate_algorithm(*, algorithm: str, allowed_algorithms: set[str], field_name: str = "algorithm") -> None:
     """
-    Validate common fields shared by envelope structures.
+    Validate that an algorithm identifier is supported.
+
+    :param algorithm: Algorithm identifier.
+    :param allowed_algorithms: Allowed algorithm identifiers.
+    :param field_name: Field name used in error messages.
+    :raises UnsupportedFormatError: If the algorithm is unsupported.
+    """
+    if algorithm not in allowed_algorithms:
+        raise UnsupportedFormatError(f"unsupported {field_name}: {algorithm}")
+
+
+def _validate_common_envelope_fields(*, version: int, algorithm: str,
+                                     allowed_algorithms: set[str], nonce: bytes, ciphertext: bytes) -> None:
+    """
+    Validate fields common to encrypted envelope structures.
+
+    This helper centralizes validation shared across multiple envelope types:
+    version, algorithm, nonce type, and ciphertext type.
 
     :param version: Envelope version.
-    :param algorithm: Algorithm identifier provided in the envelope.
-    :param expected_algorithm: Expected algorithm identifier for this envelope type.
+    :param algorithm: Algorithm identifier stored in the envelope.
+    :param allowed_algorithms: Allowed algorithm identifiers for this envelope type.
     :param nonce: Nonce bytes.
     :param ciphertext: Ciphertext bytes.
-    :raises UnsupportedFormatError: If version is unsupported, algorithm does not match,
-        or required fields have invalid types.
+    :raises UnsupportedFormatError: If version or algorithm is unsupported.
+    :raises InvalidInputError: If runtime envelope construction uses invalid argument types.
     """
     _validate_version(version)
-    if algorithm != expected_algorithm:
-        raise UnsupportedFormatError(
-            f"unsupported envelope algorithm: {algorithm}"
-        )
+    _validate_algorithm(algorithm = algorithm, allowed_algorithms = allowed_algorithms)
+
     if not isinstance(nonce, bytes):
-        raise UnsupportedFormatError("field 'nonce' must be bytes")
+        raise InvalidInputError("field 'nonce' must be bytes")
     if not isinstance(ciphertext, bytes):
-        raise UnsupportedFormatError("field 'ciphertext' must be bytes")
+        raise InvalidInputError("field 'ciphertext' must be bytes")
+
+
+def _validate_aesgcm_shape(*, nonce: bytes, ciphertext: bytes) -> None:
+    """
+    Validate AES-GCM-specific structural invariants.
+
+    :param nonce: Nonce bytes.
+    :param ciphertext: Ciphertext bytes.
+    :raises MalformedDataError: If nonce or ciphertext shape is invalid.
+    """
+    if len(nonce) != _AESGCM_NONCE_LEN:
+        raise MalformedDataError(
+            f"AES-GCM nonce must be {_AESGCM_NONCE_LEN} bytes, got {len(nonce)}"
+        )
+
+    if len(ciphertext) < _AESGCM_TAG_LEN:
+        raise MalformedDataError(
+            f"AES-GCM ciphertext must be at least {_AESGCM_TAG_LEN} bytes"
+        )
+
+
+def _validate_encrypted_blob_shape(*, algorithm: str, nonce: bytes, ciphertext: bytes) -> None:
+    """
+    Validate algorithm-specific structural invariants for encrypted blob envelopes.
+
+    :param algorithm: Algorithm identifier.
+    :param nonce: Nonce bytes.
+    :param ciphertext: Ciphertext bytes.
+    :raises UnsupportedFormatError: If algorithm is unsupported.
+    :raises MalformedDataError: If structure does not satisfy algorithm-specific constraints.
+    """
+    if algorithm == "aesgcm":
+        _validate_aesgcm_shape(nonce = nonce, ciphertext = ciphertext)
+        return
+
+    raise UnsupportedFormatError(f"unsupported algorithm shape validation: {algorithm}")
+
+
+def _validate_scrypt_params(kdf_params: dict[str, int]) -> None:
+    """
+    Validate scrypt parameter mapping.
+
+    Required keys:
+    - n
+    - r
+    - p
+
+    Each value must be a strict positive integer.
+
+    :param kdf_params: KDF parameter mapping.
+    :raises MalformedDataError: If parameters are missing or invalid.
+    """
+    if not isinstance(kdf_params, dict):
+        raise MalformedDataError("field 'kdf_params' must be dict[str, int]")
+
+    actual_keys = set(kdf_params.keys())
+    if actual_keys != _SCRYPT_REQUIRED_PARAMS:
+        missing = _SCRYPT_REQUIRED_PARAMS - actual_keys
+        extra = actual_keys - _SCRYPT_REQUIRED_PARAMS
+
+        parts: list[str] = []
+        if missing:
+            parts.append(f"missing keys: {sorted(missing)}")
+        if extra:
+            parts.append(f"unexpected keys: {sorted(extra)}")
+
+        raise MalformedDataError(
+            f"invalid scrypt parameter set ({'; '.join(parts)})"
+        )
+
+    for key, value in kdf_params.items():
+        if not isinstance(key, str):
+            raise MalformedDataError("field 'kdf_params' must be dict[str, int]")
+        if type(value) is not int:
+            raise MalformedDataError(f"scrypt parameter '{key}' must be a strict int")
+        if value <= 0:
+            raise MalformedDataError(f"scrypt parameter '{key}' must be positive")
 
 
 @dataclass(frozen = True)
@@ -114,13 +274,23 @@ class AeadEnvelope:
     ciphertext: bytes
 
     def __post_init__(self) -> None:
-        _validate_common_envelope_fields(version = self.version, algorithm = self.algorithm,
-                                         expected_algorithm = "aesgcm", nonce = self.nonce,
-                                         ciphertext = self.ciphertext)
+        _validate_common_envelope_fields(
+            version = self.version,
+            algorithm = self.algorithm,
+            allowed_algorithms = _AEAD_ALGORITHMS,
+            nonce = self.nonce,
+            ciphertext = self.ciphertext,
+        )
+
+        _validate_encrypted_blob_shape(
+            algorithm = self.algorithm,
+            nonce = self.nonce,
+            ciphertext = self.ciphertext,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """
-        Convert envelope to JSON-serializable dictionary representation.
+        Convert the envelope to a JSON-serializable dictionary.
 
         :return: Dictionary with base64-encoded binary fields.
         """
@@ -134,15 +304,23 @@ class AeadEnvelope:
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "AeadEnvelope":
         """
-        Parse AEAD envelope from dictionary representation.
+        Parse an AEAD envelope from a dictionary representation.
+
+        The parser is fail-closed:
+        - input must be a dict
+        - keys must match exactly
+        - binary fields must be valid base64
+        - semantic invariants are validated after decoding
 
         :param data: Dictionary representation of the envelope.
         :return: Parsed AeadEnvelope instance.
-        :raises UnsupportedFormatError: If required fields or structure are invalid.
-        :raises InvalidKeyError: If binary fields cannot be decoded.
+        :raises MalformedDataError: If structure or field contents are malformed.
+        :raises UnsupportedFormatError: If version or algorithm is unsupported.
         """
         if not isinstance(data, dict):
-            raise UnsupportedFormatError("AEAD envelope must be a dictionary")
+            raise MalformedDataError("AEAD envelope must be a dictionary")
+
+        _require_exact_keys(data, _AEAD_KEYS, schema_name = "AEAD envelope")
 
         version = _require_int(data, "version")
         algorithm = _require_str(data, "algorithm")
@@ -170,31 +348,69 @@ class WrappedKeyEnvelope:
     algorithm: str
     nonce: bytes
     ciphertext: bytes
+    purpose: str
     kdf: str | None = None
     kdf_salt: bytes | None = None
     kdf_params: dict[str, int] | None = None
 
     def __post_init__(self) -> None:
-        _validate_common_envelope_fields(version = self.version, algorithm = self.algorithm,
-                                         expected_algorithm = "aesgcm", nonce = self.nonce,
-                                         ciphertext = self.ciphertext)
+        _validate_common_envelope_fields(
+            version = self.version,
+            algorithm = self.algorithm,
+            allowed_algorithms = _WRAPPED_KEY_ALGORITHMS,
+            nonce = self.nonce,
+            ciphertext = self.ciphertext,
+        )
+
+        _validate_encrypted_blob_shape(
+            algorithm = self.algorithm,
+            nonce = self.nonce,
+            ciphertext = self.ciphertext,
+        )
+
+        if not isinstance(self.purpose, str):
+            raise InvalidInputError("field 'purpose' must be str")
+        if self.purpose not in _WRAPPED_KEY_PURPOSES:
+            raise UnsupportedFormatError(f"unsupported wrapped key purpose: {self.purpose}")
 
         if self.kdf is not None and not isinstance(self.kdf, str):
-            raise UnsupportedFormatError("field 'kdf' must be string or None")
+            raise InvalidInputError("field 'kdf' must be str or None")
         if self.kdf_salt is not None and not isinstance(self.kdf_salt, bytes):
-            raise UnsupportedFormatError("field 'kdf_salt' must be bytes or None")
-        if self.kdf_params is not None:
-            if not isinstance(self.kdf_params, dict):
-                raise UnsupportedFormatError("field 'kdf_params' must be dict or None")
-            for key, value in self.kdf_params.items():
-                if not isinstance(key, str) or not isinstance(value, int):
-                    raise UnsupportedFormatError(
-                        "field 'kdf_params' must be dict[str, int]"
-                    )
+            raise InvalidInputError("field 'kdf_salt' must be bytes or None")
+        if self.kdf_params is not None and not isinstance(self.kdf_params, dict):
+            raise InvalidInputError("field 'kdf_params' must be dict[str, int] or None")
+
+        has_any_kdf_fields = any(
+            value is not None for value in (self.kdf, self.kdf_salt, self.kdf_params)
+        )
+        has_all_kdf_fields = all(
+            value is not None for value in (self.kdf, self.kdf_salt, self.kdf_params)
+        )
+
+        if has_any_kdf_fields and not has_all_kdf_fields:
+            raise MalformedDataError(
+                "kdf, kdf_salt, and kdf_params must be all present or all absent"
+            )
+
+        if not has_any_kdf_fields:
+            return
+
+        _validate_algorithm(
+            algorithm = self.kdf,
+            allowed_algorithms = _KDF_IDS,
+            field_name = "kdf",
+        )
+
+        if self.kdf == "scrypt":
+            if len(self.kdf_salt) < _SCRYPT_MIN_SALT_LEN:
+                raise MalformedDataError(
+                    f"scrypt salt must be at least {_SCRYPT_MIN_SALT_LEN} bytes"
+                )
+            _validate_scrypt_params(self.kdf_params)
 
     def to_dict(self) -> dict[str, Any]:
         """
-        Convert wrapped key envelope to JSON-serializable dictionary representation.
+        Convert the wrapped key envelope to a JSON-serializable dictionary.
 
         :return: Dictionary with base64-encoded binary fields where applicable.
         """
@@ -203,6 +419,7 @@ class WrappedKeyEnvelope:
             "algorithm": self.algorithm,
             "nonce": _b64_encode(self.nonce),
             "ciphertext": _b64_encode(self.ciphertext),
+            "purpose": self.purpose,
         }
 
         if self.kdf is not None:
@@ -217,47 +434,67 @@ class WrappedKeyEnvelope:
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "WrappedKeyEnvelope":
         """
-        Parse wrapped key envelope from dictionary representation.
+        Parse a wrapped key envelope from a dictionary representation.
+
+        The parser is fail-closed:
+        - input must be a dict
+        - unknown fields are rejected
+        - required base fields must be present
+        - optional KDF fields must obey strict invariants
+        - semantic validation is delegated to the dataclass constructor
 
         :param data: Dictionary representation of the envelope.
         :return: Parsed WrappedKeyEnvelope instance.
-        :raises UnsupportedFormatError: If required fields or structure are invalid.
-        :raises InvalidKeyError: If binary fields cannot be decoded.
+        :raises MalformedDataError: If structure or field contents are malformed.
+        :raises UnsupportedFormatError: If version, algorithm, purpose, or KDF id is unsupported.
         """
         if not isinstance(data, dict):
-            raise UnsupportedFormatError("wrapped key envelope must be a dictionary")
+            raise MalformedDataError("wrapped key envelope must be a dictionary")
+
+        schema_name = "wrapped key envelope"
+        _require_allowed_keys(data, _WRAPPED_KEY_KEYS, schema_name = schema_name)
+        _require_required_keys(
+            data,
+            _WRAPPED_BASE_KEY_KEYS,
+            schema_name = schema_name,
+        )
 
         version = _require_int(data, "version")
         algorithm = _require_str(data, "algorithm")
         nonce_b64 = _require_str(data, "nonce")
         ciphertext_b64 = _require_str(data, "ciphertext")
+        purpose = _require_str(data, "purpose")
 
         kdf = data.get("kdf")
         if kdf is not None and not isinstance(kdf, str):
-            raise UnsupportedFormatError("field 'kdf' must be string or None")
+            raise MalformedDataError("field 'kdf' must be a string when present")
 
         kdf_salt_raw = data.get("kdf_salt")
         if kdf_salt_raw is not None and not isinstance(kdf_salt_raw, str):
-            raise UnsupportedFormatError("field 'kdf_salt' must be string or None")
+            raise MalformedDataError("field 'kdf_salt' must be a base64 string when present")
 
         kdf_params_raw = data.get("kdf_params")
-        normalized_kdf_params: dict[str, int] | None
+        normalized_kdf_params: dict[str, int] | None = None
         if kdf_params_raw is not None:
             if not isinstance(kdf_params_raw, dict):
-                raise UnsupportedFormatError("field 'kdf_params' must be dict or None")
+                raise MalformedDataError("field 'kdf_params' must be dict[str, int] when present")
+
             normalized_kdf_params = {}
             for key, value in kdf_params_raw.items():
-                if not isinstance(key, str) or not isinstance(value, int):
-                    raise UnsupportedFormatError("field 'kdf_params' must be dict[str, int]")
+                if not isinstance(key, str):
+                    raise MalformedDataError("field 'kdf_params' must be dict[str, int]")
+                if type(value) is not int:
+                    raise MalformedDataError(
+                        f"scrypt parameter '{key}' must be a strict int"
+                    )
                 normalized_kdf_params[key] = value
-        else:
-            normalized_kdf_params = None
 
         return WrappedKeyEnvelope(
             version = version,
             algorithm = algorithm,
             nonce = _b64_decode(nonce_b64, field_name = "nonce"),
             ciphertext = _b64_decode(ciphertext_b64, field_name = "ciphertext"),
+            purpose = purpose,
             kdf = kdf,
             kdf_salt = (
                 _b64_decode(kdf_salt_raw, field_name = "kdf_salt")
