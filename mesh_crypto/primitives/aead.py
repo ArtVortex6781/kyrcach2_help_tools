@@ -5,26 +5,72 @@ import os
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from ..errors import IntegrityError, InvalidKeyError
+from ..errors import AuthenticationError, InvalidInputError, InvalidKeyError
 from .envelopes import AeadEnvelope
 
 __all__ = ["encrypt", "decrypt"]
 
 _AEAD_VERSION = 1
 _AEAD_ALGORITHM = "aesgcm"
+_VALID_AES_KEY_LENGTHS = {16, 24, 32}
 _NONCE_LEN = 12
 
 
-def encrypt(key: bytes, plaintext: bytes, aad: bytes | None = None) -> AeadEnvelope:
+def _validate_encrypt_inputs(key: bytes, plaintext: bytes, aad: bytes) -> None:
+    """
+    Validate public API inputs for AEAD encryption.
+
+    :param key: Symmetric AES key bytes.
+    :param plaintext: Plaintext bytes to encrypt.
+    :param aad: Additional authenticated data bytes.
+    :raises InvalidInputError: If argument types are invalid.
+    :raises InvalidKeyError: If key length is invalid for AES-GCM.
+    """
+    if not isinstance(key, bytes):
+        raise InvalidInputError("key must be bytes")
+    if not isinstance(plaintext, bytes):
+        raise InvalidInputError("plaintext must be bytes")
+    if not isinstance(aad, bytes):
+        raise InvalidInputError("aad must be bytes")
+
+    if len(key) not in _VALID_AES_KEY_LENGTHS:
+        raise InvalidKeyError("AES-GCM key must be 16, 24, or 32 bytes")
+
+
+def _validate_decrypt_inputs(key: bytes, envelope: AeadEnvelope, aad: bytes) -> None:
+    """
+    Validate public API inputs for AEAD decryption.
+
+    :param key: Symmetric AES key bytes.
+    :param envelope: Parsed AEAD envelope.
+    :param aad: Additional authenticated data bytes.
+    :raises InvalidInputError: If argument types are invalid.
+    :raises InvalidKeyError: If key length is invalid for AES-GCM.
+    """
+    if not isinstance(key, bytes):
+        raise InvalidInputError("key must be bytes")
+    if not isinstance(envelope, AeadEnvelope):
+        raise InvalidInputError("envelope must be an AeadEnvelope instance")
+    if not isinstance(aad, bytes):
+        raise InvalidInputError("aad must be bytes")
+
+    if len(key) not in _VALID_AES_KEY_LENGTHS:
+        raise InvalidKeyError("AES-GCM key must be 16, 24, or 32 bytes")
+
+
+def encrypt(key: bytes, plaintext: bytes, aad: bytes) -> AeadEnvelope:
     """
     Encrypt binary data using AES-GCM and return a versioned AEAD envelope.
 
     :param key: Symmetric AES key bytes.
     :param plaintext: Plaintext bytes to encrypt.
-    :param aad: Optional additional authenticated data.
+    :param aad: Additional authenticated data bytes.
     :return: AEAD envelope containing version, algorithm, nonce, and ciphertext.
-    :raises InvalidKeyError: If the key is invalid or encryption fails.
+    :raises InvalidInputError: If argument types are invalid.
+    :raises InvalidKeyError: If key length/material is invalid or encryption fails.
     """
+    _validate_encrypt_inputs(key, plaintext, aad)
+
     try:
         aesgcm = AESGCM(key)
         nonce = os.urandom(_NONCE_LEN)
@@ -40,24 +86,24 @@ def encrypt(key: bytes, plaintext: bytes, aad: bytes | None = None) -> AeadEnvel
     )
 
 
-def decrypt(key: bytes, envelope: AeadEnvelope, aad: bytes | None = None) -> bytes:
+def decrypt(key: bytes, envelope: AeadEnvelope, aad: bytes) -> bytes:
     """
     Decrypt binary data from an AEAD envelope using AES-GCM.
 
     :param key: Symmetric AES key bytes.
-    :param envelope: AEAD envelope containing nonce and ciphertext.
-    :param aad: Optional additional authenticated data.
+    :param envelope: Parsed AEAD envelope.
+    :param aad: Additional authenticated data bytes.
     :return: Decrypted plaintext bytes.
-    :raises IntegrityError: If envelope authentication fails.
-    :raises InvalidKeyError: If the key is invalid or decryption cannot be performed.
+    :raises InvalidInputError: If argument types are invalid.
+    :raises InvalidKeyError: If key length/material is invalid.
+    :raises AuthenticationError: If authenticated decryption fails.
     """
-    if not isinstance(envelope, AeadEnvelope):
-        raise InvalidKeyError("envelope must be an AeadEnvelope instance")
+    _validate_decrypt_inputs(key, envelope, aad)
 
     try:
         aesgcm = AESGCM(key)
         return aesgcm.decrypt(envelope.nonce, envelope.ciphertext, aad)
     except InvalidTag as exc:
-        raise IntegrityError("AES-GCM integrity check failed") from exc
+        raise AuthenticationError("AES-GCM authentication failed") from exc
     except Exception as exc:
         raise InvalidKeyError("failed to decrypt data with AES-GCM") from exc
