@@ -5,22 +5,11 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 
-from ..errors import InvalidInputError, InvalidKeyError, WrongKeyTypeError
+from ..errors import InvalidKeyError, WrongKeyTypeError
 from .kdf import derive_key_hkdf
+from .._validation import require_positive_int, require_optional_bytes, require_non_empty_bytes
 
 __all__ = ["derive_session_key", "derive_raw_shared_secret"]
-
-
-def _require_positive_int(value: int, *, field_name: str) -> None:
-    """
-    Validate that a value is a strict positive integer.
-
-    :param value: Integer value to validate.
-    :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not a strict positive integer.
-    """
-    if type(value) is not int or value <= 0:
-        raise InvalidInputError(f"{field_name} must be a positive integer")
 
 
 def derive_raw_shared_secret(sk: X25519PrivateKey, peer_pk: X25519PublicKey) -> bytes:
@@ -67,13 +56,9 @@ def derive_session_key(sk: X25519PrivateKey, peer_pk: X25519PublicKey, *,
     :raises InvalidInputError: If HKDF-related inputs are invalid.
     :raises InvalidKeyError: If key exchange or derivation fails.
     """
-    if salt is not None and not isinstance(salt, bytes):
-        raise InvalidInputError("salt must be bytes or None")
-    if not isinstance(info, bytes):
-        raise InvalidInputError("info must be bytes")
-    if info == b"":
-        raise InvalidInputError("info must not be empty")
-    _require_positive_int(length, field_name = "length")
+    require_optional_bytes(salt, field_name = "salt")
+    require_non_empty_bytes(info, field_name = "info")
+    require_positive_int(length, field_name = "length")
 
     shared_secret = derive_raw_shared_secret(sk, peer_pk)
 
