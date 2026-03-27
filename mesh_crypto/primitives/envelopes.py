@@ -466,28 +466,14 @@ class WrappedKeyEnvelope:
         purpose = _require_str(data, "purpose")
 
         kdf = data.get("kdf")
-        if kdf is not None and not isinstance(kdf, str):
-            raise MalformedDataError("field 'kdf' must be a string when present")
 
         kdf_salt_raw = data.get("kdf_salt")
         if kdf_salt_raw is not None and not isinstance(kdf_salt_raw, str):
             raise MalformedDataError("field 'kdf_salt' must be a base64 string when present")
 
         kdf_params_raw = data.get("kdf_params")
-        normalized_kdf_params: dict[str, int] | None = None
-        if kdf_params_raw is not None:
-            if not isinstance(kdf_params_raw, dict):
-                raise MalformedDataError("field 'kdf_params' must be dict[str, int] when present")
-
-            normalized_kdf_params = {}
-            for key, value in kdf_params_raw.items():
-                if not isinstance(key, str):
-                    raise MalformedDataError("field 'kdf_params' must be dict[str, int]")
-                if type(value) is not int:
-                    raise MalformedDataError(
-                        f"scrypt parameter '{key}' must be a strict int"
-                    )
-                normalized_kdf_params[key] = value
+        if kdf_params_raw is not None and not isinstance(kdf_params_raw, dict):
+            raise MalformedDataError("field 'kdf_params' must be a dictionary when present")
 
         return WrappedKeyEnvelope(
             version = version,
@@ -501,5 +487,5 @@ class WrappedKeyEnvelope:
                 if kdf_salt_raw is not None
                 else None
             ),
-            kdf_params = normalized_kdf_params,
+            kdf_params = kdf_params_raw,
         )
