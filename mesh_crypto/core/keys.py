@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -11,7 +12,22 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 
+from ..errors import KeyMismatchError, WrongKeyTypeError
+
 __all__ = ["SigningKeyPair", "EncryptionKeyPair"]
+
+
+def _export_public_key_raw(key: Ed25519PublicKey | X25519PublicKey) -> bytes:
+    """
+    Export a supported public key in raw form for internal key-pair consistency checks.
+
+    :param key: Ed25519 or X25519 public key object.
+    :return: Raw public key bytes.
+    """
+    return key.public_bytes(
+        encoding = serialization.Encoding.Raw,
+        format = serialization.PublicFormat.Raw,
+    )
 
 
 @dataclass(frozen = True)
@@ -22,6 +38,22 @@ class SigningKeyPair:
 
     sk: Ed25519PrivateKey
     pk: Ed25519PublicKey
+
+    def __post_init__(self) -> None:
+        """
+        Validate that the signing key pair has correct types and matching key material.
+
+        :raises WrongKeyTypeError: If either key object has the wrong type.
+        :raises KeyMismatchError: If the public key does not match the private key.
+        """
+        if not isinstance(self.sk, Ed25519PrivateKey):
+            raise WrongKeyTypeError("sk must be an Ed25519PrivateKey")
+        if not isinstance(self.pk, Ed25519PublicKey):
+            raise WrongKeyTypeError("pk must be an Ed25519PublicKey")
+
+        expected_pk = self.sk.public_key()
+        if _export_public_key_raw(self.pk) != _export_public_key_raw(expected_pk):
+            raise KeyMismatchError("public key does not match the Ed25519 private key")
 
     @staticmethod
     def generate() -> "SigningKeyPair":
@@ -43,6 +75,22 @@ class EncryptionKeyPair:
 
     sk: X25519PrivateKey
     pk: X25519PublicKey
+
+    def __post_init__(self) -> None:
+        """
+        Validate that the encryption key pair has correct types and matching key material.
+
+        :raises WrongKeyTypeError: If either key object has the wrong type.
+        :raises KeyMismatchError: If the public key does not match the private key.
+        """
+        if not isinstance(self.sk, X25519PrivateKey):
+            raise WrongKeyTypeError("sk must be an X25519PrivateKey")
+        if not isinstance(self.pk, X25519PublicKey):
+            raise WrongKeyTypeError("pk must be an X25519PublicKey")
+
+        expected_pk = self.sk.public_key()
+        if _export_public_key_raw(self.pk) != _export_public_key_raw(expected_pk):
+            raise KeyMismatchError("public key does not match the X25519 private key")
 
     @staticmethod
     def generate() -> "EncryptionKeyPair":
