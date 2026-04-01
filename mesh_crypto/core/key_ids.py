@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from ..errors import InvalidKeyError
+from ..errors import InvalidInputError
 from .types import KeyId
 
 __all__ = ["KeyIdHelpers"]
@@ -44,7 +44,7 @@ class KeyIdHelpers:
         try:
             return uuid.UUID(bytes = data)
         except (ValueError, AttributeError, TypeError) as exc:
-            raise InvalidKeyError("invalid key_id byte representation") from exc
+            raise InvalidInputError("invalid key_id byte representation") from exc
 
     @staticmethod
     def normalize_key_id(value: KeyId | str | bytes) -> KeyId:
@@ -68,5 +68,5 @@ class KeyIdHelpers:
             if isinstance(value, (bytes, bytearray)):
                 return uuid.UUID(bytes = bytes(value))
         except (ValueError, AttributeError, TypeError) as exc:
-            raise InvalidKeyError("invalid key_id representation") from exc
-        raise InvalidKeyError("key_id must be UUID, UUID string, or 16-byte UUID bytes")
+            raise InvalidInputError("invalid key_id representation") from exc
+        raise InvalidInputError("key_id must be UUID, UUID string, or 16-byte UUID bytes")

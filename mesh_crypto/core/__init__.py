@@ -37,4 +37,4 @@ __all__ = [
     "AAD_PURPOSE_STORAGE",
     "AAD_PURPOSE_WRAPPED_KEY",
 ]
-__version__ = "0.38.0"
+__version__ = "0.38.5"
