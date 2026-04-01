@@ -12,6 +12,8 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 
 from ..errors import InvalidInputError, InvalidKeyError, WrongKeyTypeError
 from .keys import EncryptionKeyPair, SigningKeyPair
+from .._validation import require_bytes, require_x25519_public_key, require_ed25519_public_key, \
+    require_x25519_private_key, require_ed25519_private_key, require_instance
 
 __all__ = ["SigningKeySerializer", "EncryptionKeySerializer"]
 
@@ -34,8 +36,7 @@ class SigningKeySerializer:
         :raises WrongKeyTypeError: If the provided key object is not Ed25519PrivateKey.
         :raises InvalidKeyError: If export fails.
         """
-        if not isinstance(key, Ed25519PrivateKey):
-            raise WrongKeyTypeError("key must be an Ed25519PrivateKey")
+        require_ed25519_private_key(key, field_name = "Ed25519PrivateKey")
 
         try:
             return key.private_bytes(
@@ -56,8 +57,7 @@ class SigningKeySerializer:
         :raises WrongKeyTypeError: If the provided key object is not Ed25519PublicKey.
         :raises InvalidKeyError: If export fails.
         """
-        if not isinstance(key, Ed25519PublicKey):
-            raise WrongKeyTypeError("key must be an Ed25519PublicKey")
+        require_ed25519_public_key(key, field_name = "Ed25519PublicKey")
 
         try:
             return key.public_bytes(
@@ -77,8 +77,7 @@ class SigningKeySerializer:
         :raises InvalidInputError: If the input is not bytes.
         :raises InvalidKeyError: If raw bytes cannot be parsed as Ed25519 private key material.
         """
-        if not isinstance(data, bytes):
-            raise InvalidInputError("data must be bytes")
+        require_bytes(data, field_name = "Ed25519_private_key_raw")
 
         try:
             return Ed25519PrivateKey.from_private_bytes(data)
@@ -95,8 +94,7 @@ class SigningKeySerializer:
         :raises InvalidInputError: If the input is not bytes.
         :raises InvalidKeyError: If raw bytes cannot be parsed as Ed25519 public key material.
         """
-        if not isinstance(data, bytes):
-            raise InvalidInputError("data must be bytes")
+        require_bytes(data, field_name = "Ed25519_public_key_raw")
 
         try:
             return Ed25519PublicKey.from_public_bytes(data)
@@ -113,8 +111,8 @@ class SigningKeySerializer:
         :raises WrongKeyTypeError: If the provided object is not SigningKeyPair.
         :raises InvalidKeyError: If export fails.
         """
-        if not isinstance(key_pair, SigningKeyPair):
-            raise WrongKeyTypeError("key_pair must be a SigningKeyPair")
+        require_instance(key_pair, SigningKeyPair, field_name = "SigningKeyPair",
+                         error_cls = WrongKeyTypeError)
 
         return SigningKeySerializer.export_private_key_raw(key_pair.sk)
 
@@ -128,8 +126,8 @@ class SigningKeySerializer:
         :raises WrongKeyTypeError: If the provided object is not SigningKeyPair.
         :raises InvalidKeyError: If export fails.
         """
-        if not isinstance(key_pair, SigningKeyPair):
-            raise WrongKeyTypeError("key_pair must be a SigningKeyPair")
+        require_instance(key_pair, SigningKeyPair, field_name = "SigningKeyPair",
+                         error_cls = WrongKeyTypeError)
 
         return SigningKeySerializer.export_public_key_raw(key_pair.pk)
 
@@ -168,8 +166,7 @@ class EncryptionKeySerializer:
         :raises WrongKeyTypeError: If the provided key object is not X25519PrivateKey.
         :raises InvalidKeyError: If export fails.
         """
-        if not isinstance(key, X25519PrivateKey):
-            raise WrongKeyTypeError("key must be an X25519PrivateKey")
+        require_x25519_private_key(key, field_name = "X25519PrivateKey")
 
         try:
             return key.private_bytes(
@@ -190,8 +187,7 @@ class EncryptionKeySerializer:
         :raises WrongKeyTypeError: If the provided key object is not X25519PublicKey.
         :raises InvalidKeyError: If export fails.
         """
-        if not isinstance(key, X25519PublicKey):
-            raise WrongKeyTypeError("key must be an X25519PublicKey")
+        require_x25519_public_key(key, field_name = "X25519PublicKey")
 
         try:
             return key.public_bytes(
@@ -211,8 +207,7 @@ class EncryptionKeySerializer:
         :raises InvalidInputError: If the input is not bytes.
         :raises InvalidKeyError: If raw bytes cannot be parsed as X25519 private key material.
         """
-        if not isinstance(data, bytes):
-            raise InvalidInputError("data must be bytes")
+        require_bytes(data, field_name = "X25519_private_key_raw")
 
         try:
             return X25519PrivateKey.from_private_bytes(data)
@@ -229,8 +224,7 @@ class EncryptionKeySerializer:
         :raises InvalidInputError: If the input is not bytes.
         :raises InvalidKeyError: If raw bytes cannot be parsed as X25519 public key material.
         """
-        if not isinstance(data, bytes):
-            raise InvalidInputError("data must be bytes")
+        require_bytes(data, field_name = "X25519_public_key_raw")
 
         try:
             return X25519PublicKey.from_public_bytes(data)
@@ -247,8 +241,8 @@ class EncryptionKeySerializer:
         :raises WrongKeyTypeError: If the provided object is not EncryptionKeyPair.
         :raises InvalidKeyError: If export fails.
         """
-        if not isinstance(key_pair, EncryptionKeyPair):
-            raise WrongKeyTypeError("key_pair must be an EncryptionKeyPair")
+        require_instance(key_pair, EncryptionKeyPair, field_name = "EncryptionKeyPair",
+                         error_cls = WrongKeyTypeError)
 
         return EncryptionKeySerializer.export_private_key_raw(key_pair.sk)
 
@@ -262,8 +256,8 @@ class EncryptionKeySerializer:
         :raises WrongKeyTypeError: If the provided object is not EncryptionKeyPair.
         :raises InvalidKeyError: If export fails.
         """
-        if not isinstance(key_pair, EncryptionKeyPair):
-            raise WrongKeyTypeError("key_pair must be an EncryptionKeyPair")
+        require_instance(key_pair, EncryptionKeyPair, field_name = "EncryptionKeyPair",
+                         error_cls = WrongKeyTypeError)
 
         return EncryptionKeySerializer.export_public_key_raw(key_pair.pk)
 
