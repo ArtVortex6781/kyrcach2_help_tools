@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 
-from ..errors import InvalidInputError, InvalidKeyError, WrongKeyTypeError
+from ..errors import InvalidKeyError, WrongKeyTypeError
 from .keys import EncryptionKeyPair, SigningKeyPair
 from .._validation import require_bytes, require_x25519_public_key, require_ed25519_public_key, \
     require_x25519_private_key, require_ed25519_private_key, require_instance
