@@ -5,9 +5,10 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 
-from ..errors import InvalidKeyError, WrongKeyTypeError
+from ..errors import InvalidKeyError
 from .kdf import derive_key_hkdf
-from .._validation import require_positive_int, require_optional_bytes, require_non_empty_bytes
+from .._validation import require_positive_int, require_non_empty_bytes, require_x25519_private_key, \
+    require_x25519_public_key, require_optional_instance
 
 __all__ = ["derive_session_key", "derive_raw_shared_secret"]
 
@@ -27,10 +28,8 @@ def derive_raw_shared_secret(sk: X25519PrivateKey, peer_pk: X25519PublicKey) -> 
     :raises WrongKeyTypeError: If key objects are of the wrong type.
     :raises InvalidKeyError: If key exchange fails.
     """
-    if not isinstance(sk, X25519PrivateKey):
-        raise WrongKeyTypeError("sk must be an X25519PrivateKey")
-    if not isinstance(peer_pk, X25519PublicKey):
-        raise WrongKeyTypeError("peer_pk must be an X25519PublicKey")
+    require_x25519_private_key(sk, field_name = "sk")
+    require_x25519_public_key(peer_pk, field_name = "peer_pk")
 
     try:
         return sk.exchange(peer_pk)
@@ -56,7 +55,7 @@ def derive_session_key(sk: X25519PrivateKey, peer_pk: X25519PublicKey, *,
     :raises InvalidInputError: If HKDF-related inputs are invalid.
     :raises InvalidKeyError: If key exchange or derivation fails.
     """
-    require_optional_bytes(salt, field_name = "salt")
+    require_optional_instance(salt, field_name = "salt", expected_type = bytes)
     require_non_empty_bytes(info, field_name = "info")
     require_positive_int(length, field_name = "length")
 

@@ -4,13 +4,12 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from ..errors import InvalidInputError, InvalidKeyError
+from ..errors import InvalidKeyError
 from .._validation import (require_positive_int, require_bytes,
-                           require_optional_bytes, require_non_empty_bytes)
+                           require_optional_instance, require_non_empty_bytes, SCRYPT_MIN_SALT_LEN,
+                           require_min_length_bytes)
 
 __all__ = ["derive_key_scrypt", "derive_key_hkdf"]
-
-_SCRYPT_MIN_SALT_LEN = 16
 
 
 def derive_key_scrypt(password: bytes, salt: bytes, *, length: int = 32,
@@ -29,12 +28,7 @@ def derive_key_scrypt(password: bytes, salt: bytes, *, length: int = 32,
     :raises InvalidKeyError: If key derivation fails after input validation.
     """
     require_bytes(password, field_name = "password")
-    require_bytes(salt, field_name = "salt")
-    if len(salt) < _SCRYPT_MIN_SALT_LEN:
-        raise InvalidInputError(
-            f"salt must be at least {_SCRYPT_MIN_SALT_LEN} bytes"
-        )
-
+    require_min_length_bytes(salt, field_name = "salt", min_length = SCRYPT_MIN_SALT_LEN)
     require_positive_int(length, field_name = "length")
     require_positive_int(n, field_name = "n")
     require_positive_int(r, field_name = "r")
@@ -67,7 +61,7 @@ def derive_key_hkdf(secret: bytes, *, salt: bytes | None = None,
     :raises InvalidKeyError: If key derivation fails after input validation.
     """
     require_bytes(secret, field_name = "secret")
-    require_optional_bytes(salt, field_name = "salt")
+    require_optional_instance(salt, expected_type = bytes, field_name = "salt")
     require_non_empty_bytes(info, field_name = "info")
     require_positive_int(length, field_name = "length")
 
