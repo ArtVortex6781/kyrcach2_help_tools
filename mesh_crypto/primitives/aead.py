@@ -5,14 +5,14 @@ import os
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from ..errors import AuthenticationError, InvalidInputError, InvalidKeyError
+from ..errors import AuthenticationError, InvalidKeyError
 from .envelopes import AeadEnvelope
+from .._validation import require_bytes, require_aesgcm_key_length, require_instance
 
 __all__ = ["encrypt", "decrypt"]
 
 _AEAD_VERSION = 1
 _AEAD_ALGORITHM = "aesgcm"
-_VALID_AES_KEY_LENGTHS = {16, 24, 32}
 _NONCE_LEN = 12
 
 
@@ -26,15 +26,9 @@ def _validate_encrypt_inputs(key: bytes, plaintext: bytes, aad: bytes) -> None:
     :raises InvalidInputError: If argument types are invalid.
     :raises InvalidKeyError: If key length is invalid for AES-GCM.
     """
-    if not isinstance(key, bytes):
-        raise InvalidInputError("key must be bytes")
-    if not isinstance(plaintext, bytes):
-        raise InvalidInputError("plaintext must be bytes")
-    if not isinstance(aad, bytes):
-        raise InvalidInputError("aad must be bytes")
-
-    if len(key) not in _VALID_AES_KEY_LENGTHS:
-        raise InvalidKeyError("AES-GCM key must be 16, 24, or 32 bytes")
+    require_bytes(plaintext, field_name = "plaintext")
+    require_bytes(aad, field_name = "aad")
+    require_aesgcm_key_length(key)
 
 
 def _validate_decrypt_inputs(key: bytes, envelope: AeadEnvelope, aad: bytes) -> None:
@@ -47,15 +41,9 @@ def _validate_decrypt_inputs(key: bytes, envelope: AeadEnvelope, aad: bytes) -> 
     :raises InvalidInputError: If argument types are invalid.
     :raises InvalidKeyError: If key length is invalid for AES-GCM.
     """
-    if not isinstance(key, bytes):
-        raise InvalidInputError("key must be bytes")
-    if not isinstance(envelope, AeadEnvelope):
-        raise InvalidInputError("envelope must be an AeadEnvelope instance")
-    if not isinstance(aad, bytes):
-        raise InvalidInputError("aad must be bytes")
-
-    if len(key) not in _VALID_AES_KEY_LENGTHS:
-        raise InvalidKeyError("AES-GCM key must be 16, 24, or 32 bytes")
+    require_aesgcm_key_length(key)
+    require_bytes(aad, field_name = "aad")
+    require_instance(envelope, AeadEnvelope, field_name = "envelope")
 
 
 def encrypt(key: bytes, plaintext: bytes, aad: bytes) -> AeadEnvelope:

@@ -6,15 +6,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
-from ..errors import (
-    InvalidInputError,
-    InvalidKeyError,
-    SignatureVerificationError,
-    WrongKeyTypeError,
-)
+from ..errors import InvalidKeyError, SignatureVerificationError
+
+from .._validation import require_bytes, require_non_empty_bytes, \
+    require_ed25519_private_key, require_ed25519_public_key
 
 __all__ = ["sign", "verify"]
-
 _SIGNING_PAYLOAD_PREFIX = b"mesh_crypto:sign:v1"
 
 
@@ -53,14 +50,9 @@ def _validate_sign_inputs(context: bytes, data: bytes, sk: Ed25519PrivateKey) ->
     :raises InvalidInputError: If context or data are invalid.
     :raises WrongKeyTypeError: If the key object has the wrong type.
     """
-    if not isinstance(context, bytes):
-        raise InvalidInputError("context must be bytes")
-    if context == b"":
-        raise InvalidInputError("context must not be empty")
-    if not isinstance(data, bytes):
-        raise InvalidInputError("data must be bytes")
-    if not isinstance(sk, Ed25519PrivateKey):
-        raise WrongKeyTypeError("sk must be an Ed25519PrivateKey")
+    require_non_empty_bytes(context, field_name = "context")
+    require_bytes(data, field_name = "data")
+    require_ed25519_private_key(sk, field_name = "sk")
 
 
 def _validate_verify_inputs(context: bytes, data: bytes,
@@ -75,16 +67,10 @@ def _validate_verify_inputs(context: bytes, data: bytes,
     :raises InvalidInputError: If context, data, or signature are invalid.
     :raises WrongKeyTypeError: If the key object has the wrong type.
     """
-    if not isinstance(context, bytes):
-        raise InvalidInputError("context must be bytes")
-    if context == b"":
-        raise InvalidInputError("context must not be empty")
-    if not isinstance(data, bytes):
-        raise InvalidInputError("data must be bytes")
-    if not isinstance(signature, bytes):
-        raise InvalidInputError("signature must be bytes")
-    if not isinstance(pk, Ed25519PublicKey):
-        raise WrongKeyTypeError("pk must be an Ed25519PublicKey")
+    require_non_empty_bytes(context, field_name = "context")
+    require_bytes(data, field_name = "data")
+    require_bytes(signature, field_name = "signature")
+    require_ed25519_public_key(pk, field_name = "pk")
 
 
 def sign(context: bytes, data: bytes, sk: Ed25519PrivateKey) -> bytes:
