@@ -21,6 +21,7 @@ __all__ = [
     "require_int",
     "require_positive_int",
     "require_exact_length_bytes",
+    "require_min_length_bytes",
     "require_ed25519_private_key",
     "require_ed25519_public_key",
     "require_x25519_private_key",
@@ -178,6 +179,22 @@ def require_exact_length_bytes(value: object, *, field_name: str, length: int) -
     require_bytes(value, field_name = field_name)
     if len(value) != length:
         raise InvalidInputError(f"{field_name} must be exactly {length} bytes")
+
+
+def require_min_length_bytes(value: object, *, field_name: str, min_length: int) -> None:
+    """
+    Validate that a value is bytes with at least the specified length.
+
+    :param value: Value to validate.
+    :param field_name: Field name used in error messages.
+    :param min_length: Minimum allowed length in bytes.
+    :raises InvalidInputError: If the value is not bytes or is too short.
+    """
+    require_bytes(value, field_name = field_name)
+    require_positive_int(min_length, field_name = "min_length")
+
+    if len(value) < min_length:
+        raise InvalidInputError(f"{field_name} must be at least {min_length} bytes")
 
 
 # ==============================
