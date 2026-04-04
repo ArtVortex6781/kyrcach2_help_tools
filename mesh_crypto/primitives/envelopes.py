@@ -4,7 +4,9 @@ import base64
 from dataclasses import dataclass
 from typing import Any
 
-from ..errors import InvalidInputError, MalformedDataError, UnsupportedFormatError
+from ..errors import MalformedDataError, UnsupportedFormatError
+from .._validation import require_bytes, require_instance, require_str, require_optional_instance, \
+    SCRYPT_MIN_SALT_LEN
 
 __all__ = ["AeadEnvelope", "WrappedKeyEnvelope"]
 
@@ -28,7 +30,6 @@ _WRAPPED_BASE_KEY_KEYS = {"version", "algorithm", "nonce", "ciphertext", "purpos
 
 _AESGCM_NONCE_LEN = 12
 _AESGCM_TAG_LEN = 16
-_SCRYPT_MIN_SALT_LEN = 16
 _SCRYPT_REQUIRED_PARAMS = {"n", "r", "p"}
 
 
@@ -128,8 +129,7 @@ def _require_str(data: dict[str, Any], field_name: str) -> str:
     :raises MalformedDataError: If the field is missing or is not a string.
     """
     value = data.get(field_name)
-    if not isinstance(value, str):
-        raise MalformedDataError(f"missing or invalid string field '{field_name}'")
+    require_instance(value, str, field_name = field_name, error_cls = MalformedDataError)
     return value
 
 
@@ -175,11 +175,8 @@ def _validate_common_envelope_fields(*, version: int, algorithm: str,
     """
     _validate_version(version)
     _validate_algorithm(algorithm = algorithm, allowed_algorithms = allowed_algorithms)
-
-    if not isinstance(nonce, bytes):
-        raise InvalidInputError("field 'nonce' must be bytes")
-    if not isinstance(ciphertext, bytes):
-        raise InvalidInputError("field 'ciphertext' must be bytes")
+    require_bytes(nonce, field_name = "nonce")
+    require_bytes(ciphertext, field_name = "ciphertext")
 
 
 def _validate_aesgcm_shape(*, nonce: bytes, ciphertext: bytes) -> None:
@@ -232,8 +229,7 @@ def _validate_scrypt_params(kdf_params: dict[str, int]) -> None:
     :param kdf_params: KDF parameter mapping.
     :raises MalformedDataError: If parameters are missing or invalid.
     """
-    if not isinstance(kdf_params, dict):
-        raise MalformedDataError("field 'kdf_params' must be dict[str, int]")
+    require_instance(kdf_params, dict, field_name = "kdf_params", error_cls = MalformedDataError)
 
     actual_keys = set(kdf_params.keys())
     if actual_keys != _SCRYPT_REQUIRED_PARAMS:
@@ -251,8 +247,7 @@ def _validate_scrypt_params(kdf_params: dict[str, int]) -> None:
         )
 
     for key, value in kdf_params.items():
-        if not isinstance(key, str):
-            raise MalformedDataError("field 'kdf_params' must be dict[str, int]")
+        require_instance(key, str, field_name = "key", error_cls = MalformedDataError)
         if type(value) is not int:
             raise MalformedDataError(f"scrypt parameter '{key}' must be a strict int")
         if value <= 0:
@@ -317,9 +312,7 @@ class AeadEnvelope:
         :raises MalformedDataError: If structure or field contents are malformed.
         :raises UnsupportedFormatError: If version or algorithm is unsupported.
         """
-        if not isinstance(data, dict):
-            raise MalformedDataError("AEAD envelope must be a dictionary")
-
+        require_instance(data, dict, field_name = "data", error_cls = MalformedDataError)
         _require_exact_keys(data, _AEAD_KEYS, schema_name = "AEAD envelope")
 
         version = _require_int(data, "version")
@@ -368,17 +361,13 @@ class WrappedKeyEnvelope:
             ciphertext = self.ciphertext,
         )
 
-        if not isinstance(self.purpose, str):
-            raise InvalidInputError("field 'purpose' must be str")
+        require_str(self.purpose, field_name = "purpose")
         if self.purpose not in _WRAPPED_KEY_PURPOSES:
             raise UnsupportedFormatError(f"unsupported wrapped key purpose: {self.purpose}")
 
-        if self.kdf is not None and not isinstance(self.kdf, str):
-            raise InvalidInputError("field 'kdf' must be str or None")
-        if self.kdf_salt is not None and not isinstance(self.kdf_salt, bytes):
-            raise InvalidInputError("field 'kdf_salt' must be bytes or None")
-        if self.kdf_params is not None and not isinstance(self.kdf_params, dict):
-            raise InvalidInputError("field 'kdf_params' must be dict[str, int] or None")
+        require_optional_instance(self.kdf, str, field_name = "kdf")
+        require_optional_instance(self.kdf_salt, bytes, field_name = "kdf_salt")
+        require_optional_instance(self.kdf_params, dict, field_name = "kdf_params")
 
         has_any_kdf_fields = any(
             value is not None for value in (self.kdf, self.kdf_salt, self.kdf_params)
@@ -402,9 +391,9 @@ class WrappedKeyEnvelope:
         )
 
         if self.kdf == "scrypt":
-            if len(self.kdf_salt) < _SCRYPT_MIN_SALT_LEN:
+            if len(self.kdf_salt) < SCRYPT_MIN_SALT_LEN:
                 raise MalformedDataError(
-                    f"scrypt salt must be at least {_SCRYPT_MIN_SALT_LEN} bytes"
+                    f"scrypt salt must be at least {SCRYPT_MIN_SALT_LEN} bytes"
                 )
             _validate_scrypt_params(self.kdf_params)
 
@@ -448,8 +437,7 @@ class WrappedKeyEnvelope:
         :raises MalformedDataError: If structure or field contents are malformed.
         :raises UnsupportedFormatError: If version, algorithm, purpose, or KDF id is unsupported.
         """
-        if not isinstance(data, dict):
-            raise MalformedDataError("wrapped key envelope must be a dictionary")
+        require_instance(data, dict, field_name = "data", error_cls = MalformedDataError)
 
         schema_name = "wrapped key envelope"
         _require_allowed_keys(data, _WRAPPED_KEY_KEYS, schema_name = schema_name)
@@ -468,12 +456,10 @@ class WrappedKeyEnvelope:
         kdf = data.get("kdf")
 
         kdf_salt_raw = data.get("kdf_salt")
-        if kdf_salt_raw is not None and not isinstance(kdf_salt_raw, str):
-            raise MalformedDataError("field 'kdf_salt' must be a base64 string when present")
+        require_optional_instance(kdf_salt_raw, str, field_name = "kdf_salt_raw", error_cls = MalformedDataError)
 
         kdf_params_raw = data.get("kdf_params")
-        if kdf_params_raw is not None and not isinstance(kdf_params_raw, dict):
-            raise MalformedDataError("field 'kdf_params' must be a dictionary when present")
+        require_optional_instance(kdf_params_raw, dict, field_name = "kdf_params_raw", error_cls = MalformedDataError)
 
         return WrappedKeyEnvelope(
             version = version,
