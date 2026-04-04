@@ -16,198 +16,402 @@ from mesh_crypto.core import (
     SigningKeyPair,
     SigningKeySerializer,
 )
-from mesh_crypto.errors import InvalidKeyError
+from mesh_crypto.errors import InvalidInputError, InvalidKeyError, WrongKeyTypeError
 
 
 class TestSigningKeySerializer:
-    def test_serialize_private_deserialize_roundtrip(self) -> None:
+    def test_export_private_key_raw_returns_32_bytes(self) -> None:
         pair = SigningKeyPair.generate()
 
-        private_bytes = SigningKeySerializer.serialize_private_key(pair.sk)
-        restored = SigningKeySerializer.deserialize_private_key(private_bytes)
+        raw = SigningKeySerializer.export_private_key_raw(pair.sk)
+
+        assert isinstance(raw, bytes)
+        assert len(raw) == 32
+
+    def test_export_public_key_raw_returns_32_bytes(self) -> None:
+        pair = SigningKeyPair.generate()
+
+        raw = SigningKeySerializer.export_public_key_raw(pair.pk)
+
+        assert isinstance(raw, bytes)
+        assert len(raw) == 32
+
+    def test_import_private_key_raw_restores_private_key(self) -> None:
+        pair = SigningKeyPair.generate()
+        raw = SigningKeySerializer.export_private_key_raw(pair.sk)
+
+        restored = SigningKeySerializer.import_private_key_raw(raw)
 
         assert isinstance(restored, Ed25519PrivateKey)
-        assert SigningKeySerializer.serialize_private_key(restored) == private_bytes
+        assert SigningKeySerializer.export_private_key_raw(restored) == raw
 
-    def test_serialize_public_deserialize_roundtrip(self) -> None:
+    def test_import_public_key_raw_restores_public_key(self) -> None:
         pair = SigningKeyPair.generate()
+        raw = SigningKeySerializer.export_public_key_raw(pair.pk)
 
-        public_bytes = SigningKeySerializer.serialize_public_key(pair.pk)
-        restored = SigningKeySerializer.deserialize_public_key(public_bytes)
+        restored = SigningKeySerializer.import_public_key_raw(raw)
 
         assert isinstance(restored, Ed25519PublicKey)
-        assert SigningKeySerializer.serialize_public_key(restored) == public_bytes
+        assert SigningKeySerializer.export_public_key_raw(restored) == raw
 
-    def test_restore_pair_from_private_bytes_restores_matching_public_key(self) -> None:
+    def test_private_export_import_roundtrip_preserves_derived_public_key(self) -> None:
         pair = SigningKeyPair.generate()
 
-        private_bytes = SigningKeySerializer.serialize_private_key(pair.sk)
-        restored = SigningKeySerializer.restore_pair_from_private_bytes(private_bytes)
+        private_raw = SigningKeySerializer.export_private_key_raw(pair.sk)
+        restored_sk = SigningKeySerializer.import_private_key_raw(private_raw)
+        restored_pk = restored_sk.public_key()
+
+        assert SigningKeySerializer.export_public_key_raw(restored_pk) == (
+            SigningKeySerializer.export_public_key_raw(pair.pk)
+        )
+
+    def test_export_pair_private_key_raw_works(self) -> None:
+        pair = SigningKeyPair.generate()
+
+        raw = SigningKeySerializer.export_pair_private_key_raw(pair)
+
+        assert raw == SigningKeySerializer.export_private_key_raw(pair.sk)
+        assert len(raw) == 32
+
+    def test_export_pair_public_key_raw_works(self) -> None:
+        pair = SigningKeyPair.generate()
+
+        raw = SigningKeySerializer.export_pair_public_key_raw(pair)
+
+        assert raw == SigningKeySerializer.export_public_key_raw(pair.pk)
+        assert len(raw) == 32
+
+    def test_restore_pair_from_private_bytes_restores_signing_key_pair(self) -> None:
+        pair = SigningKeyPair.generate()
+        private_raw = SigningKeySerializer.export_private_key_raw(pair.sk)
+
+        restored = SigningKeySerializer.restore_pair_from_private_bytes(private_raw)
 
         assert isinstance(restored, SigningKeyPair)
-        assert SigningKeySerializer.serialize_private_key(restored.sk) == private_bytes
-        assert SigningKeySerializer.serialize_public_key(restored.pk) == (
-            SigningKeySerializer.serialize_public_key(pair.pk)
-        )
-
-    def test_serialize_pair_private_key_matches_private_key_serialization(self) -> None:
-        pair = SigningKeyPair.generate()
-
-        assert SigningKeySerializer.serialize_pair_private_key(pair) == (
-            SigningKeySerializer.serialize_private_key(pair.sk)
-        )
-
-    def test_serialize_pair_public_key_matches_public_key_serialization(self) -> None:
-        pair = SigningKeyPair.generate()
-
-        assert SigningKeySerializer.serialize_pair_public_key(pair) == (
-            SigningKeySerializer.serialize_public_key(pair.pk)
+        assert SigningKeySerializer.export_private_key_raw(restored.sk) == private_raw
+        assert SigningKeySerializer.export_public_key_raw(restored.pk) == (
+            SigningKeySerializer.export_public_key_raw(pair.pk)
         )
 
     @pytest.mark.parametrize(
-        "data",
+        "bad_key",
+        [
+            None,
+            object(),
+            "not-a-key",
+            b"not-a-key",
+            123,
+            X25519PrivateKey.generate(),
+            X25519PrivateKey.generate().public_key(),
+            Ed25519PrivateKey.generate().public_key(),
+        ],
+    )
+    def test_export_private_key_raw_rejects_wrong_object_type(self, bad_key) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            SigningKeySerializer.export_private_key_raw(bad_key)
+
+    @pytest.mark.parametrize(
+        "bad_key",
+        [
+            None,
+            object(),
+            "not-a-key",
+            b"not-a-key",
+            123,
+            X25519PrivateKey.generate(),
+            X25519PrivateKey.generate().public_key(),
+            Ed25519PrivateKey.generate(),
+        ],
+    )
+    def test_export_public_key_raw_rejects_wrong_object_type(self, bad_key) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            SigningKeySerializer.export_public_key_raw(bad_key)
+
+    @pytest.mark.parametrize(
+        "bad_data",
+        [
+            None,
+            object(),
+            "not-bytes",
+            123,
+            bytearray(b"x" * 32),
+        ],
+    )
+    def test_import_private_key_raw_rejects_non_bytes_input(self, bad_data) -> None:
+        with pytest.raises(InvalidInputError):
+            SigningKeySerializer.import_private_key_raw(bad_data)
+
+    @pytest.mark.parametrize(
+        "bad_data",
+        [
+            None,
+            object(),
+            "not-bytes",
+            123,
+            bytearray(b"x" * 32),
+        ],
+    )
+    def test_import_public_key_raw_rejects_non_bytes_input(self, bad_data) -> None:
+        with pytest.raises(InvalidInputError):
+            SigningKeySerializer.import_public_key_raw(bad_data)
+
+    @pytest.mark.parametrize(
+        "bad_data",
         [
             b"",
             b"short",
             b"x" * 31,
             b"x" * 33,
             b"x" * 64,
-            "not-bytes",
-            None,
-            object(),
         ],
     )
-    def test_deserialize_private_key_rejects_invalid_data(self, data) -> None:
+    def test_import_private_key_raw_rejects_malformed_bytes(self, bad_data: bytes) -> None:
         with pytest.raises(InvalidKeyError):
-            SigningKeySerializer.deserialize_private_key(data)
+            SigningKeySerializer.import_private_key_raw(bad_data)
 
     @pytest.mark.parametrize(
-        "data",
+        "bad_data",
         [
             b"",
             b"short",
             b"x" * 31,
             b"x" * 33,
             b"x" * 64,
-            "not-bytes",
-            None,
-            object(),
         ],
     )
-    def test_deserialize_public_key_rejects_invalid_data(self, data) -> None:
+    def test_import_public_key_raw_rejects_malformed_bytes(self, bad_data: bytes) -> None:
         with pytest.raises(InvalidKeyError):
-            SigningKeySerializer.deserialize_public_key(data)
+            SigningKeySerializer.import_public_key_raw(bad_data)
 
     @pytest.mark.parametrize(
-        "data",
+        "bad_pair",
         [
-            b"",
-            b"short",
-            b"x" * 31,
-            b"x" * 33,
-            b"x" * 64,
-            "not-bytes",
             None,
             object(),
+            "not-a-pair",
+            b"not-a-pair",
+            123,
+            EncryptionKeyPair.generate(),
+            Ed25519PrivateKey.generate(),
+            Ed25519PrivateKey.generate().public_key(),
         ],
     )
-    def test_restore_pair_from_private_bytes_rejects_invalid_data(self, data) -> None:
-        with pytest.raises(InvalidKeyError):
-            SigningKeySerializer.restore_pair_from_private_bytes(data)
+    def test_export_pair_private_key_raw_rejects_wrong_object_type(self, bad_pair) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            SigningKeySerializer.export_pair_private_key_raw(bad_pair)
+
+    @pytest.mark.parametrize(
+        "bad_pair",
+        [
+            None,
+            object(),
+            "not-a-pair",
+            b"not-a-pair",
+            123,
+            EncryptionKeyPair.generate(),
+            Ed25519PrivateKey.generate(),
+            Ed25519PrivateKey.generate().public_key(),
+        ],
+    )
+    def test_export_pair_public_key_raw_rejects_wrong_object_type(self, bad_pair) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            SigningKeySerializer.export_pair_public_key_raw(bad_pair)
 
 
 class TestEncryptionKeySerializer:
-    def test_serialize_private_deserialize_roundtrip(self) -> None:
+    def test_export_private_key_raw_returns_32_bytes(self) -> None:
         pair = EncryptionKeyPair.generate()
 
-        private_bytes = EncryptionKeySerializer.serialize_private_key(pair.sk)
-        restored = EncryptionKeySerializer.deserialize_private_key(private_bytes)
+        raw = EncryptionKeySerializer.export_private_key_raw(pair.sk)
+
+        assert isinstance(raw, bytes)
+        assert len(raw) == 32
+
+    def test_export_public_key_raw_returns_32_bytes(self) -> None:
+        pair = EncryptionKeyPair.generate()
+
+        raw = EncryptionKeySerializer.export_public_key_raw(pair.pk)
+
+        assert isinstance(raw, bytes)
+        assert len(raw) == 32
+
+    def test_import_private_key_raw_restores_private_key(self) -> None:
+        pair = EncryptionKeyPair.generate()
+        raw = EncryptionKeySerializer.export_private_key_raw(pair.sk)
+
+        restored = EncryptionKeySerializer.import_private_key_raw(raw)
 
         assert isinstance(restored, X25519PrivateKey)
-        assert EncryptionKeySerializer.serialize_private_key(restored) == private_bytes
+        assert EncryptionKeySerializer.export_private_key_raw(restored) == raw
 
-    def test_serialize_public_deserialize_roundtrip(self) -> None:
+    def test_import_public_key_raw_restores_public_key(self) -> None:
         pair = EncryptionKeyPair.generate()
+        raw = EncryptionKeySerializer.export_public_key_raw(pair.pk)
 
-        public_bytes = EncryptionKeySerializer.serialize_public_key(pair.pk)
-        restored = EncryptionKeySerializer.deserialize_public_key(public_bytes)
+        restored = EncryptionKeySerializer.import_public_key_raw(raw)
 
         assert isinstance(restored, X25519PublicKey)
-        assert EncryptionKeySerializer.serialize_public_key(restored) == public_bytes
+        assert EncryptionKeySerializer.export_public_key_raw(restored) == raw
 
-    def test_restore_pair_from_private_bytes_restores_matching_public_key(self) -> None:
+    def test_private_export_import_roundtrip_preserves_derived_public_key(self) -> None:
         pair = EncryptionKeyPair.generate()
 
-        private_bytes = EncryptionKeySerializer.serialize_private_key(pair.sk)
-        restored = EncryptionKeySerializer.restore_pair_from_private_bytes(private_bytes)
+        private_raw = EncryptionKeySerializer.export_private_key_raw(pair.sk)
+        restored_sk = EncryptionKeySerializer.import_private_key_raw(private_raw)
+        restored_pk = restored_sk.public_key()
+
+        assert EncryptionKeySerializer.export_public_key_raw(restored_pk) == (
+            EncryptionKeySerializer.export_public_key_raw(pair.pk)
+        )
+
+    def test_export_pair_private_key_raw_works(self) -> None:
+        pair = EncryptionKeyPair.generate()
+
+        raw = EncryptionKeySerializer.export_pair_private_key_raw(pair)
+
+        assert raw == EncryptionKeySerializer.export_private_key_raw(pair.sk)
+        assert len(raw) == 32
+
+    def test_export_pair_public_key_raw_works(self) -> None:
+        pair = EncryptionKeyPair.generate()
+
+        raw = EncryptionKeySerializer.export_pair_public_key_raw(pair)
+
+        assert raw == EncryptionKeySerializer.export_public_key_raw(pair.pk)
+        assert len(raw) == 32
+
+    def test_restore_pair_from_private_bytes_restores_encryption_key_pair(self) -> None:
+        pair = EncryptionKeyPair.generate()
+        private_raw = EncryptionKeySerializer.export_private_key_raw(pair.sk)
+
+        restored = EncryptionKeySerializer.restore_pair_from_private_bytes(private_raw)
 
         assert isinstance(restored, EncryptionKeyPair)
-        assert EncryptionKeySerializer.serialize_private_key(restored.sk) == private_bytes
-        assert EncryptionKeySerializer.serialize_public_key(restored.pk) == (
-            EncryptionKeySerializer.serialize_public_key(pair.pk)
-        )
-
-    def test_serialize_pair_private_key_matches_private_key_serialization(self) -> None:
-        pair = EncryptionKeyPair.generate()
-
-        assert EncryptionKeySerializer.serialize_pair_private_key(pair) == (
-            EncryptionKeySerializer.serialize_private_key(pair.sk)
-        )
-
-    def test_serialize_pair_public_key_matches_public_key_serialization(self) -> None:
-        pair = EncryptionKeyPair.generate()
-
-        assert EncryptionKeySerializer.serialize_pair_public_key(pair) == (
-            EncryptionKeySerializer.serialize_public_key(pair.pk)
+        assert EncryptionKeySerializer.export_private_key_raw(restored.sk) == private_raw
+        assert EncryptionKeySerializer.export_public_key_raw(restored.pk) == (
+            EncryptionKeySerializer.export_public_key_raw(pair.pk)
         )
 
     @pytest.mark.parametrize(
-        "data",
+        "bad_key",
+        [
+            None,
+            object(),
+            "not-a-key",
+            b"not-a-key",
+            123,
+            Ed25519PrivateKey.generate(),
+            Ed25519PrivateKey.generate().public_key(),
+            X25519PrivateKey.generate().public_key(),
+        ],
+    )
+    def test_export_private_key_raw_rejects_wrong_object_type(self, bad_key) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            EncryptionKeySerializer.export_private_key_raw(bad_key)
+
+    @pytest.mark.parametrize(
+        "bad_key",
+        [
+            None,
+            object(),
+            "not-a-key",
+            b"not-a-key",
+            123,
+            Ed25519PrivateKey.generate(),
+            Ed25519PrivateKey.generate().public_key(),
+            X25519PrivateKey.generate(),
+        ],
+    )
+    def test_export_public_key_raw_rejects_wrong_object_type(self, bad_key) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            EncryptionKeySerializer.export_public_key_raw(bad_key)
+
+    @pytest.mark.parametrize(
+        "bad_data",
+        [
+            None,
+            object(),
+            "not-bytes",
+            123,
+            bytearray(b"x" * 32),
+        ],
+    )
+    def test_import_private_key_raw_rejects_non_bytes_input(self, bad_data) -> None:
+        with pytest.raises(InvalidInputError):
+            EncryptionKeySerializer.import_private_key_raw(bad_data)
+
+    @pytest.mark.parametrize(
+        "bad_data",
+        [
+            None,
+            object(),
+            "not-bytes",
+            123,
+            bytearray(b"x" * 32),
+        ],
+    )
+    def test_import_public_key_raw_rejects_non_bytes_input(self, bad_data) -> None:
+        with pytest.raises(InvalidInputError):
+            EncryptionKeySerializer.import_public_key_raw(bad_data)
+
+    @pytest.mark.parametrize(
+        "bad_data",
         [
             b"",
             b"short",
             b"x" * 31,
             b"x" * 33,
             b"x" * 64,
-            "not-bytes",
-            None,
-            object(),
         ],
     )
-    def test_deserialize_private_key_rejects_invalid_data(self, data) -> None:
+    def test_import_private_key_raw_rejects_malformed_bytes(self, bad_data: bytes) -> None:
         with pytest.raises(InvalidKeyError):
-            EncryptionKeySerializer.deserialize_private_key(data)
+            EncryptionKeySerializer.import_private_key_raw(bad_data)
 
     @pytest.mark.parametrize(
-        "data",
+        "bad_data",
         [
             b"",
             b"short",
             b"x" * 31,
             b"x" * 33,
             b"x" * 64,
-            "not-bytes",
-            None,
-            object(),
         ],
     )
-    def test_deserialize_public_key_rejects_invalid_data(self, data) -> None:
+    def test_import_public_key_raw_rejects_malformed_bytes(self, bad_data: bytes) -> None:
         with pytest.raises(InvalidKeyError):
-            EncryptionKeySerializer.deserialize_public_key(data)
+            EncryptionKeySerializer.import_public_key_raw(bad_data)
 
     @pytest.mark.parametrize(
-        "data",
+        "bad_pair",
         [
-            b"",
-            b"short",
-            b"x" * 31,
-            b"x" * 33,
-            b"x" * 64,
-            "not-bytes",
             None,
             object(),
+            "not-a-pair",
+            b"not-a-pair",
+            123,
+            SigningKeyPair.generate(),
+            X25519PrivateKey.generate(),
+            X25519PrivateKey.generate().public_key(),
         ],
     )
-    def test_restore_pair_from_private_bytes_rejects_invalid_data(self, data) -> None:
-        with pytest.raises(InvalidKeyError):
-            EncryptionKeySerializer.restore_pair_from_private_bytes(data)
+    def test_export_pair_private_key_raw_rejects_wrong_object_type(self, bad_pair) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            EncryptionKeySerializer.export_pair_private_key_raw(bad_pair)
+
+    @pytest.mark.parametrize(
+        "bad_pair",
+        [
+            None,
+            object(),
+            "not-a-pair",
+            b"not-a-pair",
+            123,
+            SigningKeyPair.generate(),
+            X25519PrivateKey.generate(),
+            X25519PrivateKey.generate().public_key(),
+        ],
+    )
+    def test_export_pair_public_key_raw_rejects_wrong_object_type(self, bad_pair) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            EncryptionKeySerializer.export_pair_public_key_raw(bad_pair)
