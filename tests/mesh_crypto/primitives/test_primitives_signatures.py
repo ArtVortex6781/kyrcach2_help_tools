@@ -2,9 +2,18 @@ from __future__ import annotations
 
 import pytest
 
-from mesh_crypto.core import SigningKeyPair
-from mesh_crypto.errors import IntegrityError, InvalidKeyError
-from mesh_crypto.primitives.signatures import sign, verify
+from mesh_crypto.core import (
+    SIGNING_CONTEXT_HANDSHAKE,
+    SIGNING_CONTEXT_IDENTITY,
+    SigningKeyPair,
+)
+from mesh_crypto.errors import (
+    InvalidInputError,
+    SignatureVerificationError,
+    WrongKeyTypeError,
+)
+from mesh_crypto.primitives import sign, verify
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 
 class TestSignatures:
@@ -12,7 +21,7 @@ class TestSignatures:
         pair = SigningKeyPair.generate()
         data = b"hello mesh"
 
-        signature = sign(data, pair.sk)
+        signature = sign(SIGNING_CONTEXT_IDENTITY, data, pair.sk)
 
         assert isinstance(signature, bytes)
         assert len(signature) > 0
@@ -21,120 +30,173 @@ class TestSignatures:
         pair = SigningKeyPair.generate()
         data = b"hello mesh"
 
-        signature = sign(data, pair.sk)
+        signature = sign(SIGNING_CONTEXT_IDENTITY, data, pair.sk)
 
-        verify(data, signature, pair.pk)
+        verify(SIGNING_CONTEXT_IDENTITY, data, signature, pair.pk)
 
-    def test_verify_fails_when_data_is_modified(self) -> None:
+    def test_same_data_but_different_context_fails_verification(self) -> None:
+        pair = SigningKeyPair.generate()
+        data = b"hello mesh"
+
+        signature = sign(SIGNING_CONTEXT_IDENTITY, data, pair.sk)
+
+        with pytest.raises(SignatureVerificationError):
+            verify(SIGNING_CONTEXT_HANDSHAKE, data, signature, pair.pk)
+
+    def test_same_context_but_modified_data_fails_verification(self) -> None:
         pair = SigningKeyPair.generate()
         data = b"hello mesh"
         tampered_data = b"hello mesh!"
 
-        signature = sign(data, pair.sk)
+        signature = sign(SIGNING_CONTEXT_IDENTITY, data, pair.sk)
 
-        with pytest.raises(IntegrityError):
-            verify(tampered_data, signature, pair.pk)
+        with pytest.raises(SignatureVerificationError):
+            verify(SIGNING_CONTEXT_IDENTITY, tampered_data, signature, pair.pk)
 
-    def test_verify_fails_with_other_public_key(self) -> None:
+    def test_other_public_key_fails_verification(self) -> None:
         alice = SigningKeyPair.generate()
         bob = SigningKeyPair.generate()
         data = b"hello mesh"
 
-        signature = sign(data, alice.sk)
+        signature = sign(SIGNING_CONTEXT_IDENTITY, data, alice.sk)
 
-        with pytest.raises(IntegrityError):
-            verify(data, signature, bob.pk)
+        with pytest.raises(SignatureVerificationError):
+            verify(SIGNING_CONTEXT_IDENTITY, data, signature, bob.pk)
 
-    def test_verify_fails_for_invalid_signature_bytes(self) -> None:
+    def test_invalid_signature_raises_signature_verification_error(self) -> None:
         pair = SigningKeyPair.generate()
         data = b"hello mesh"
-        signature = sign(data, pair.sk)
-
+        signature = sign(SIGNING_CONTEXT_IDENTITY, data, pair.sk)
         bad_signature = signature[:-1] + bytes([signature[-1] ^ 0x01])
 
-        with pytest.raises(IntegrityError):
-            verify(data, bad_signature, pair.pk)
+        with pytest.raises(SignatureVerificationError):
+            verify(SIGNING_CONTEXT_IDENTITY, data, bad_signature, pair.pk)
 
     @pytest.mark.parametrize(
-        "bad_private_key",
+        "bad_context",
         [
             None,
-            object(),
-            b"not-a-private-key",
-            "not-a-private-key",
+            "",
+            "not-bytes",
             123,
+            object(),
         ],
     )
-    def test_sign_rejects_invalid_private_key(self, bad_private_key) -> None:
-        with pytest.raises(InvalidKeyError):
-            sign(b"hello mesh", bad_private_key)
-
-    @pytest.mark.parametrize(
-        "bad_public_key",
-        [
-            None,
-            object(),
-            b"not-a-public-key",
-            "not-a-public-key",
-            123,
-        ],
-    )
-    def test_verify_rejects_invalid_public_key(self, bad_public_key) -> None:
+    def test_sign_rejects_non_bytes_context(self, bad_context) -> None:
         pair = SigningKeyPair.generate()
-        data = b"hello mesh"
-        signature = sign(data, pair.sk)
 
-        with pytest.raises(InvalidKeyError):
-            verify(data, signature, bad_public_key)
+        with pytest.raises(InvalidInputError):
+            sign(bad_context, b"hello mesh", pair.sk)
+
+    def test_sign_rejects_empty_context(self) -> None:
+        pair = SigningKeyPair.generate()
+
+        with pytest.raises(InvalidInputError):
+            sign(b"", b"hello mesh", pair.sk)
+
+    @pytest.mark.parametrize(
+        "bad_context",
+        [
+            None,
+            "",
+            "not-bytes",
+            123,
+            object(),
+        ],
+    )
+    def test_verify_rejects_non_bytes_context(self, bad_context) -> None:
+        pair = SigningKeyPair.generate()
+        signature = sign(SIGNING_CONTEXT_IDENTITY, b"hello mesh", pair.sk)
+
+        with pytest.raises(InvalidInputError):
+            verify(bad_context, b"hello mesh", signature, pair.pk)
+
+    def test_verify_rejects_empty_context(self) -> None:
+        pair = SigningKeyPair.generate()
+        signature = sign(SIGNING_CONTEXT_IDENTITY, b"hello mesh", pair.sk)
+
+        with pytest.raises(InvalidInputError):
+            verify(b"", b"hello mesh", signature, pair.pk)
 
     @pytest.mark.parametrize(
         "bad_data",
         [
             None,
-            object(),
             "not-bytes",
             123,
+            object(),
         ],
     )
-    def test_sign_rejects_invalid_data_argument(self, bad_data) -> None:
+    def test_sign_rejects_non_bytes_data(self, bad_data) -> None:
         pair = SigningKeyPair.generate()
 
-        with pytest.raises(InvalidKeyError):
-            sign(bad_data, pair.sk)
+        with pytest.raises(InvalidInputError):
+            sign(SIGNING_CONTEXT_IDENTITY, bad_data, pair.sk)
 
     @pytest.mark.parametrize(
         "bad_data",
         [
             None,
-            object(),
             "not-bytes",
             123,
+            object(),
         ],
     )
-    def test_verify_rejects_invalid_data_argument(self, bad_data) -> None:
+    def test_verify_rejects_non_bytes_data(self, bad_data) -> None:
         pair = SigningKeyPair.generate()
-        signature = sign(b"hello mesh", pair.sk)
+        signature = sign(SIGNING_CONTEXT_IDENTITY, b"hello mesh", pair.sk)
 
-        with pytest.raises(InvalidKeyError):
-            verify(bad_data, signature, pair.pk)
+        with pytest.raises(InvalidInputError):
+            verify(SIGNING_CONTEXT_IDENTITY, bad_data, signature, pair.pk)
 
     @pytest.mark.parametrize(
         "bad_signature",
         [
             None,
-            object(),
             "not-bytes",
             123,
+            object(),
         ],
     )
-    def test_verify_rejects_invalid_signature_argument(self, bad_signature) -> None:
+    def test_verify_rejects_non_bytes_signature(self, bad_signature) -> None:
         pair = SigningKeyPair.generate()
 
-        with pytest.raises(InvalidKeyError):
-            verify(b"hello mesh", bad_signature, pair.pk)
+        with pytest.raises(InvalidInputError):
+            verify(SIGNING_CONTEXT_IDENTITY, b"hello mesh", bad_signature, pair.pk)
 
-    def test_verify_empty_signature_raises_integrity_error(self) -> None:
+    @pytest.mark.parametrize(
+        "bad_sk",
+        [
+            None,
+            object(),
+            "not-a-key",
+            b"not-a-key",
+            123,
+            X25519PrivateKey.generate(),
+            X25519PrivateKey.generate().public_key(),
+            SigningKeyPair.generate().pk,
+        ],
+    )
+    def test_sign_rejects_wrong_private_key_type(self, bad_sk) -> None:
+        with pytest.raises(WrongKeyTypeError):
+            sign(SIGNING_CONTEXT_IDENTITY, b"hello mesh", bad_sk)
+
+    @pytest.mark.parametrize(
+        "bad_pk",
+        [
+            None,
+            object(),
+            "not-a-key",
+            b"not-a-key",
+            123,
+            X25519PrivateKey.generate(),
+            X25519PrivateKey.generate().public_key(),
+            SigningKeyPair.generate().sk,
+        ],
+    )
+    def test_verify_rejects_wrong_public_key_type(self, bad_pk) -> None:
         pair = SigningKeyPair.generate()
+        signature = sign(SIGNING_CONTEXT_IDENTITY, b"hello mesh", pair.sk)
 
-        with pytest.raises(IntegrityError):
-            verify(b"hello mesh", b"", pair.pk)
+        with pytest.raises(WrongKeyTypeError):
+            verify(SIGNING_CONTEXT_IDENTITY, b"hello mesh", signature, bad_pk)
