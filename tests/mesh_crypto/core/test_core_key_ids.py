@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mesh_crypto.core import KeyIdHelpers, KeyId
-from mesh_crypto.errors import InvalidKeyError
+from mesh_crypto.errors import InvalidInputError
 
 
 class TestNewKeyId:
@@ -29,7 +29,7 @@ class TestKeyIdBytes:
         assert isinstance(raw, bytes)
         assert len(raw) == 16
 
-    def test_key_id_bytes_roundtrip(self) -> None:
+    def test_key_id_from_bytes_restores_original_uuid(self) -> None:
         original = KeyIdHelpers.new_key_id()
 
         raw = KeyIdHelpers.key_id_to_bytes(original)
@@ -61,7 +61,7 @@ class TestNormalizeKeyId:
 
         assert normalized == original
 
-    def test_normalize_key_id_accepts_bytearray(self) -> None:
+    def test_normalize_key_id_accepts_uuid_bytearray(self) -> None:
         original = KeyIdHelpers.new_key_id()
 
         normalized = KeyIdHelpers.normalize_key_id(bytearray(original.bytes))
@@ -84,7 +84,7 @@ class TestNormalizeKeyId:
     ],
 )
 def test_normalize_key_id_rejects_invalid_values(value) -> None:
-    with pytest.raises(InvalidKeyError):
+    with pytest.raises(InvalidInputError):
         KeyIdHelpers.normalize_key_id(value)
 
 
@@ -101,5 +101,5 @@ def test_normalize_key_id_rejects_invalid_values(value) -> None:
     ],
 )
 def test_key_id_from_bytes_rejects_invalid_values(value) -> None:
-    with pytest.raises(InvalidKeyError):
+    with pytest.raises(InvalidInputError):
         KeyIdHelpers.key_id_from_bytes(value)

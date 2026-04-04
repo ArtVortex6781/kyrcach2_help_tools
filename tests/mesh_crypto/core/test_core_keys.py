@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 
-from mesh_crypto.core.keys import EncryptionKeyPair, SigningKeyPair
+from mesh_crypto.core import EncryptionKeyPair, SigningKeyPair
 from mesh_crypto.errors import KeyMismatchError, WrongKeyTypeError
 
 
