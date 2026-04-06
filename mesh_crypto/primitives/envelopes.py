@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..errors import MalformedDataError, UnsupportedFormatError
-from .._validation import require_bytes, require_instance, require_str, require_optional_instance, \
-    SCRYPT_MIN_SALT_LEN
+from .._validation import require_instance, require_optional_instance, SCRYPT_MIN_SALT_LEN
 
 __all__ = ["AeadEnvelope", "WrappedKeyEnvelope"]
 
@@ -175,8 +174,8 @@ def _validate_common_envelope_fields(*, version: int, algorithm: str,
     """
     _validate_version(version)
     _validate_algorithm(algorithm = algorithm, allowed_algorithms = allowed_algorithms)
-    require_bytes(nonce, field_name = "nonce")
-    require_bytes(ciphertext, field_name = "ciphertext")
+    require_instance(nonce, bytes, field_name = "nonce", error_cls = MalformedDataError)
+    require_instance(ciphertext, bytes, field_name = "ciphertext", error_cls = MalformedDataError)
 
 
 def _validate_aesgcm_shape(*, nonce: bytes, ciphertext: bytes) -> None:
@@ -361,13 +360,13 @@ class WrappedKeyEnvelope:
             ciphertext = self.ciphertext,
         )
 
-        require_str(self.purpose, field_name = "purpose")
+        require_instance(self.purpose, str, field_name = "purpose", error_cls = MalformedDataError)
         if self.purpose not in _WRAPPED_KEY_PURPOSES:
             raise UnsupportedFormatError(f"unsupported wrapped key purpose: {self.purpose}")
 
-        require_optional_instance(self.kdf, str, field_name = "kdf")
-        require_optional_instance(self.kdf_salt, bytes, field_name = "kdf_salt")
-        require_optional_instance(self.kdf_params, dict, field_name = "kdf_params")
+        require_optional_instance(self.kdf, str, field_name = "kdf", error_cls = MalformedDataError)
+        require_optional_instance(self.kdf_salt, bytes, field_name = "kdf_salt", error_cls = MalformedDataError)
+        require_optional_instance(self.kdf_params, dict, field_name = "kdf_params", error_cls = MalformedDataError)
 
         has_any_kdf_fields = any(
             value is not None for value in (self.kdf, self.kdf_salt, self.kdf_params)
