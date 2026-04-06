@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 
-from .errors import InvalidInputError, WrongKeyTypeError
+from .errors import InvalidInputError, WrongKeyTypeError, InvalidKeyError
 
 __all__ = [
     "require_instance",
@@ -303,4 +303,4 @@ def require_aesgcm_key_length(value: object, *, field_name: str = "key") -> None
     """
     require_bytes(value, field_name = field_name)
     if len(value) not in VALID_AES_KEY_LENGTHS:
-        raise InvalidInputError(f"{field_name} must be 16, 24, or 32 bytes")
+        raise InvalidKeyError(f"{field_name} must be 16, 24, or 32 bytes")
