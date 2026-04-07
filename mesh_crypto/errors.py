@@ -13,6 +13,10 @@ __all__ = [
     "SignatureVerificationError",
     "ReplayDetectedError",
     "RollbackDetectedError",
+    "KeystoreError",
+    "ProtectorError",
+    "ProtectorBackendUnavailableError",
+    "ProtectorOperationError",
     "KeyNotFoundError",
     "KeystoreNotLoadedError",
 ]
@@ -123,14 +127,41 @@ class RollbackDetectedError(IntegrityError):
     """
 
 
-class KeyNotFoundError(MeshCryptoError):
+class KeystoreError(MeshCryptoError):
     """
-    Raised when a requested key cannot be found in the active key lookup
-    context or keystore.
+    Base exception for keystore-related failures.
     """
 
 
-class KeystoreNotLoadedError(MeshCryptoError):
+class ProtectorError(KeystoreError):
+    """
+    Base exception for protector-related failures.
+    """
+
+
+class ProtectorBackendUnavailableError(ProtectorError):
+    """
+    Raised when a required protector backend is not available.
+
+    Example:
+        OS keyring backend or python-keyring package is unavailable.
+    """
+
+
+class ProtectorOperationError(ProtectorError):
+    """
+    Raised when a protector backend fails during wrap/unwrap operations.
+    """
+
+
+class KeyNotFoundError(KeystoreError):
+    """
+    Raised when a requested key cannot be found in the current keystore
+    context.
+    """
+
+
+class KeystoreNotLoadedError(KeystoreError):
     """
     Raised when a keystore operation requires loaded key material, but the
     keystore has not been initialized or opened yet.
