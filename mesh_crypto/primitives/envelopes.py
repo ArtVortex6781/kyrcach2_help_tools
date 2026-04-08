@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from typing import Any
 
 from ..errors import MalformedDataError, UnsupportedFormatError
-from .._validation import require_instance, require_optional_instance, SCRYPT_MIN_SALT_LEN
+from .._internal import require_instance, require_optional_instance, SCRYPT_MIN_SALT_LEN, b64_encode, b64_decode, \
+    require_int_field, require_str_field
 
 __all__ = ["AeadEnvelope", "WrappedKeyEnvelope"]
 
@@ -30,31 +30,6 @@ _WRAPPED_BASE_KEY_KEYS = {"version", "algorithm", "nonce", "ciphertext", "purpos
 _AESGCM_NONCE_LEN = 12
 _AESGCM_TAG_LEN = 16
 _SCRYPT_REQUIRED_PARAMS = {"n", "r", "p"}
-
-
-def _b64_encode(data: bytes) -> str:
-    """
-    Encode raw bytes as a base64 ASCII string.
-
-    :param data: Raw bytes to encode.
-    :return: Base64-encoded ASCII string.
-    """
-    return base64.b64encode(data).decode("ascii")
-
-
-def _b64_decode(data: str, *, field_name: str) -> bytes:
-    """
-    Decode a base64 ASCII string into raw bytes.
-
-    :param data: Base64-encoded ASCII string.
-    :param field_name: Field name used in error messages.
-    :return: Decoded raw bytes.
-    :raises MalformedDataError: If the value is not valid base64 text.
-    """
-    try:
-        return base64.b64decode(data.encode("ascii"), validate = True)
-    except Exception as exc:
-        raise MalformedDataError(f"invalid base64 value for '{field_name}'") from exc
 
 
 def _require_required_keys(data: dict[str, Any], required_keys: set[str], *, schema_name: str) -> None:
@@ -101,35 +76,6 @@ def _require_exact_keys(data: dict[str, Any], expected_keys: set[str], *, schema
     """
     _require_allowed_keys(data, expected_keys, schema_name = schema_name)
     _require_required_keys(data, expected_keys, schema_name = schema_name)
-
-
-def _require_int(data: dict[str, Any], field_name: str) -> int:
-    """
-    Extract and validate an integer field from a mapping.
-
-    :param data: Source mapping.
-    :param field_name: Required field name.
-    :return: Integer field value.
-    :raises MalformedDataError: If the field is missing or is not a strict int.
-    """
-    value = data.get(field_name)
-    if type(value) is not int:
-        raise MalformedDataError(f"missing or invalid integer field '{field_name}'")
-    return value
-
-
-def _require_str(data: dict[str, Any], field_name: str) -> str:
-    """
-    Extract and validate a string field from a mapping.
-
-    :param data: Source mapping.
-    :param field_name: Required field name.
-    :return: String field value.
-    :raises MalformedDataError: If the field is missing or is not a string.
-    """
-    value = data.get(field_name)
-    require_instance(value, str, field_name = field_name, error_cls = MalformedDataError)
-    return value
 
 
 def _validate_version(version: int) -> None:
@@ -291,8 +237,8 @@ class AeadEnvelope:
         return {
             "version": self.version,
             "algorithm": self.algorithm,
-            "nonce": _b64_encode(self.nonce),
-            "ciphertext": _b64_encode(self.ciphertext),
+            "nonce": b64_encode(self.nonce),
+            "ciphertext": b64_encode(self.ciphertext),
         }
 
     @staticmethod
@@ -314,16 +260,16 @@ class AeadEnvelope:
         require_instance(data, dict, field_name = "data", error_cls = MalformedDataError)
         _require_exact_keys(data, _AEAD_KEYS, schema_name = "AEAD envelope")
 
-        version = _require_int(data, "version")
-        algorithm = _require_str(data, "algorithm")
-        nonce_b64 = _require_str(data, "nonce")
-        ciphertext_b64 = _require_str(data, "ciphertext")
+        version = require_int_field(data, "version")
+        algorithm = require_str_field(data, "algorithm")
+        nonce_b64 = require_str_field(data, "nonce")
+        ciphertext_b64 = require_str_field(data, "ciphertext")
 
         return AeadEnvelope(
             version = version,
             algorithm = algorithm,
-            nonce = _b64_decode(nonce_b64, field_name = "nonce"),
-            ciphertext = _b64_decode(ciphertext_b64, field_name = "ciphertext"),
+            nonce = b64_decode(nonce_b64, field_name = "nonce"),
+            ciphertext = b64_decode(ciphertext_b64, field_name = "ciphertext"),
         )
 
 
@@ -405,15 +351,15 @@ class WrappedKeyEnvelope:
         out: dict[str, Any] = {
             "version": self.version,
             "algorithm": self.algorithm,
-            "nonce": _b64_encode(self.nonce),
-            "ciphertext": _b64_encode(self.ciphertext),
+            "nonce": b64_encode(self.nonce),
+            "ciphertext": b64_encode(self.ciphertext),
             "purpose": self.purpose,
         }
 
         if self.kdf is not None:
             out["kdf"] = self.kdf
         if self.kdf_salt is not None:
-            out["kdf_salt"] = _b64_encode(self.kdf_salt)
+            out["kdf_salt"] = b64_encode(self.kdf_salt)
         if self.kdf_params is not None:
             out["kdf_params"] = dict(self.kdf_params)
 
@@ -446,11 +392,11 @@ class WrappedKeyEnvelope:
             schema_name = schema_name,
         )
 
-        version = _require_int(data, "version")
-        algorithm = _require_str(data, "algorithm")
-        nonce_b64 = _require_str(data, "nonce")
-        ciphertext_b64 = _require_str(data, "ciphertext")
-        purpose = _require_str(data, "purpose")
+        version = require_int_field(data, "version")
+        algorithm = require_str_field(data, "algorithm")
+        nonce_b64 = require_str_field(data, "nonce")
+        ciphertext_b64 = require_str_field(data, "ciphertext")
+        purpose = require_str_field(data, "purpose")
 
         kdf = data.get("kdf")
 
@@ -463,12 +409,12 @@ class WrappedKeyEnvelope:
         return WrappedKeyEnvelope(
             version = version,
             algorithm = algorithm,
-            nonce = _b64_decode(nonce_b64, field_name = "nonce"),
-            ciphertext = _b64_decode(ciphertext_b64, field_name = "ciphertext"),
+            nonce = b64_decode(nonce_b64, field_name = "nonce"),
+            ciphertext = b64_decode(ciphertext_b64, field_name = "ciphertext"),
             purpose = purpose,
             kdf = kdf,
             kdf_salt = (
-                _b64_decode(kdf_salt_raw, field_name = "kdf_salt")
+                b64_decode(kdf_salt_raw, field_name = "kdf_salt")
                 if kdf_salt_raw is not None
                 else None
             ),

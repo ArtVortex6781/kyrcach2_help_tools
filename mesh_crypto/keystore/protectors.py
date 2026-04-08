@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .._validation import require_non_empty_bytes, require_non_empty_str, require_instance, \
-    require_positive_int
+from .._internal import require_non_empty_bytes, require_non_empty_str, require_instance, \
+    require_positive_int, b64_decode, b64_encode, require_int_field, require_str_field, require_dict_field
 from ..errors import (
     InvalidInputError,
     MalformedDataError,
@@ -36,74 +35,6 @@ _PROVIDER_METADATA_VERSION = 1
 _MASTER_KEY_PURPOSE = "seed"
 
 
-def _b64_encode(data: bytes) -> str:
-    """
-    Encode raw bytes as a base64 ASCII string.
-
-    :param data: Raw bytes to encode.
-    :return: Base64-encoded ASCII string.
-    """
-    return base64.b64encode(data).decode("ascii")
-
-
-def _b64_decode(data: str, *, field_name: str) -> bytes:
-    """
-    Decode a base64 ASCII string into raw bytes.
-
-    :param data: Base64-encoded ASCII string.
-    :param field_name: Field name used in error messages.
-    :return: Decoded raw bytes.
-    :raises MalformedDataError: If the value is not valid base64 text.
-    """
-    try:
-        return base64.b64decode(data.encode("ascii"), validate = True)
-    except Exception as exc:
-        raise MalformedDataError(f"invalid base64 value for '{field_name}'") from exc
-
-
-def _require_dict_field(data: dict[str, Any], field_name: str) -> dict[str, Any]:
-    """
-    Extract and validate a required dictionary field.
-
-    :param data: Source metadata dictionary.
-    :param field_name: Required field name.
-    :return: Dictionary field value.
-    :raises MalformedDataError: If the field is missing or invalid.
-    """
-    value = data.get(field_name)
-    require_instance(value, dict, field_name = field_name, error_cls = MalformedDataError)
-    return value
-
-
-def _require_str_field(data: dict[str, Any], field_name: str) -> str:
-    """
-    Extract and validate a required string field.
-
-    :param data: Source metadata dictionary.
-    :param field_name: Required field name.
-    :return: String field value.
-    :raises MalformedDataError: If the field is missing or invalid.
-    """
-    value = data.get(field_name)
-    require_instance(value, str, field_name = field_name, error_cls = MalformedDataError)
-    return value
-
-
-def _require_int_field(data: dict[str, Any], field_name: str) -> int:
-    """
-    Extract and validate a required strict integer field.
-
-    :param data: Source metadata dictionary.
-    :param field_name: Required field name.
-    :return: Integer field value.
-    :raises MalformedDataError: If the field is missing or invalid.
-    """
-    value = data.get(field_name)
-    if type(value) is not int:
-        raise MalformedDataError(f"missing or invalid integer field '{field_name}'")
-    return value
-
-
 def _validate_provider_metadata_common(meta: dict[str, Any], *, expected_provider: str) -> None:
     """
     Validate common provider metadata fields.
@@ -113,8 +44,8 @@ def _validate_provider_metadata_common(meta: dict[str, Any], *, expected_provide
     :raises MalformedDataError: If metadata structure is invalid.
     :raises UnsupportedFormatError: If version or provider is unsupported.
     """
-    version = _require_int_field(meta, "version")
-    provider = _require_str_field(meta, "provider")
+    version = require_int_field(meta, "version")
+    provider = require_str_field(meta, "provider")
 
     if version != _PROVIDER_METADATA_VERSION:
         raise UnsupportedFormatError(f"unsupported protector metadata version: {version}")
@@ -237,7 +168,7 @@ class PasswordProtector:
         require_instance(meta, dict, field_name = "meta", error_cls = MalformedDataError)
 
         _validate_provider_metadata_common(meta, expected_provider = _PASSWORD_PROVIDER)
-        wrapped_raw = _require_dict_field(meta, "wrapped")
+        wrapped_raw = require_dict_field(meta, "wrapped")
         wrapped = WrappedKeyEnvelope.from_dict(wrapped_raw)
 
         if wrapped.kdf != "scrypt" or wrapped.kdf_salt is None or wrapped.kdf_params is None:
@@ -300,7 +231,7 @@ class KeyringProtector:
             from uuid import uuid4
 
             name = self.entry_name or f"mesh-master-{uuid4().hex}"
-            keyring.set_password(self.service_name, name, _b64_encode(master_key))
+            keyring.set_password(self.service_name, name, b64_encode(master_key))
         except Exception as exc:
             raise ProtectorOperationError("failed to store master key in keyring") from exc
 
@@ -324,8 +255,8 @@ class KeyringProtector:
         require_instance(meta, dict, field_name = "meta", error_cls = MalformedDataError)
         _validate_provider_metadata_common(meta, expected_provider = _KEYRING_PROVIDER)
 
-        service = _require_str_field(meta, "service")
-        name = _require_str_field(meta, "name")
+        service = require_str_field(meta, "service")
+        name = require_str_field(meta, "name")
 
         try:
             value = keyring.get_password(service, name)
@@ -335,4 +266,4 @@ class KeyringProtector:
         if value is None:
             raise ProtectorOperationError("no keyring secret found for provided metadata")
 
-        return _b64_decode(value, field_name = "keyring_secret")
+        return b64_decode(value, field_name = "keyring_secret")

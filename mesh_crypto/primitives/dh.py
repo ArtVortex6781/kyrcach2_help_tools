@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 
 from ..errors import InvalidKeyError
 from .kdf import derive_key_hkdf
-from .._validation import require_positive_int, require_non_empty_bytes, require_x25519_private_key, \
+from .._internal import require_positive_int, require_non_empty_bytes, require_x25519_private_key, \
     require_x25519_public_key, require_optional_instance
 
 __all__ = ["derive_session_key", "derive_raw_shared_secret"]

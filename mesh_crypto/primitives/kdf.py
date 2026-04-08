@@ -5,9 +5,9 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 from ..errors import InvalidKeyError
-from .._validation import (require_positive_int, require_bytes,
-                           require_optional_instance, require_non_empty_bytes, SCRYPT_MIN_SALT_LEN,
-                           require_min_length_bytes)
+from .._internal import (require_positive_int, require_bytes,
+                         require_optional_instance, require_non_empty_bytes, SCRYPT_MIN_SALT_LEN,
+                         require_min_length_bytes)
 
 __all__ = ["derive_key_scrypt", "derive_key_hkdf"]
 

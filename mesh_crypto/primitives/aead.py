@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ..errors import AuthenticationError, InvalidKeyError
 from .envelopes import AeadEnvelope
-from .._validation import require_bytes, require_aesgcm_key_length, require_instance
+from .._internal import require_bytes, require_aesgcm_key_length, require_instance
 
 __all__ = ["encrypt", "decrypt"]
 

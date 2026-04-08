@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 )
 
 from ..errors import KeyMismatchError
-from .._validation import require_ed25519_private_key, require_x25519_private_key, require_ed25519_public_key, \
+from .._internal import require_ed25519_private_key, require_x25519_private_key, require_ed25519_public_key, \
     require_x25519_public_key
 
 __all__ = ["SigningKeyPair", "EncryptionKeyPair"]

@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 from ..errors import InvalidKeyError, SignatureVerificationError
 
-from .._validation import require_bytes, require_non_empty_bytes, \
+from .._internal import require_bytes, require_non_empty_bytes, \
     require_ed25519_private_key, require_ed25519_public_key
 
 __all__ = ["sign", "verify"]
