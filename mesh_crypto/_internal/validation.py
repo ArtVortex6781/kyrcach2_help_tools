@@ -9,7 +9,9 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 
-from .errors import InvalidInputError, WrongKeyTypeError, InvalidKeyError
+from typing import Type
+
+from ..errors import InvalidInputError, WrongKeyTypeError, InvalidKeyError, MeshCryptoError
 
 __all__ = [
     "require_instance",
@@ -54,7 +56,7 @@ def _type_name(expected_type: type | tuple[type, ...]) -> str:
 
 
 def require_instance(value: object, expected_type: type | tuple[type, ...],
-                     *, field_name: str, error_cls: type[Exception] = InvalidInputError) -> None:
+                     *, field_name: str, error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is an instance of the expected type.
 
@@ -69,7 +71,7 @@ def require_instance(value: object, expected_type: type | tuple[type, ...],
 
 
 def require_optional_instance(value: object, expected_type: type | tuple[type, ...], *,
-                              field_name: str, error_cls: type[Exception] = InvalidInputError) -> None:
+                              field_name: str, error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is either None or an instance of the expected type.
 
