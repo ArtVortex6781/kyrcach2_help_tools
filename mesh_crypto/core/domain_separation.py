@@ -11,6 +11,7 @@ __all__ = [
     "SIGNING_CONTEXT_METADATA",
     "AAD_PURPOSE_STORAGE",
     "AAD_PURPOSE_WRAPPED_KEY",
+    "AAD_PURPOSE_KEY_BLOB"
 ]
 
 # HKDF info labels
@@ -28,3 +29,4 @@ SIGNING_CONTEXT_METADATA = b"mesh_crypto:sign:metadata:v1"
 # AEAD/AAD purpose labels
 AAD_PURPOSE_STORAGE = b"mesh_crypto:aad:storage:v1"
 AAD_PURPOSE_WRAPPED_KEY = b"mesh_crypto:aad:wrapped_key:v1"
+AAD_PURPOSE_KEY_BLOB = b"mesh_crypto:aad:key_blob:v1"

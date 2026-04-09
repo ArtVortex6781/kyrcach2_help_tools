@@ -3,6 +3,7 @@ from __future__ import annotations
 from .domain_separation import (
     AAD_PURPOSE_STORAGE,
     AAD_PURPOSE_WRAPPED_KEY,
+    AAD_PURPOSE_KEY_BLOB,
     HKDF_INFO_HANDSHAKE_BINDING,
     HKDF_INFO_SESSION_KEY,
     HKDF_INFO_STORAGE_KEY,
@@ -36,5 +37,6 @@ __all__ = [
     "SIGNING_CONTEXT_METADATA",
     "AAD_PURPOSE_STORAGE",
     "AAD_PURPOSE_WRAPPED_KEY",
+    "AAD_PURPOSE_KEY_BLOB"
 ]
 __version__ = "0.38.5"
