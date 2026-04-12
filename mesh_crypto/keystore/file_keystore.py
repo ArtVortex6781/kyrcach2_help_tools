@@ -140,22 +140,31 @@ class FileKeyStore:
         Load wrapped master key metadata and restore the plaintext master key.
 
         :raises FileNotFoundError: If master metadata file is missing.
-        :raises MalformedDataError: If metadata files are malformed.
-        :raises InvalidKeyError: If protector unwrap fails or master key is invalid.
+        :raises MalformedDataError: If metadata files are malformed or not valid JSON objects.
+        :raises InvalidKeyError: If the restored master key is invalid.
         """
         if not self.exists():
             raise FileNotFoundError("master.key not found")
 
-        raw = json.loads(self._master_meta_path.read_text(encoding = "utf-8"))
+        try:
+            raw = json.loads(self._master_meta_path.read_text(encoding = "utf-8"))
+        except json.JSONDecodeError as exc:
+            raise MalformedDataError("master.key contains invalid JSON") from exc
         require_instance(raw, dict, field_name = "master_metadata", error_cls = MalformedDataError)
 
         master_key = self._protector.unwrap(raw)
-        require_exact_length_bytes(master_key, field_name = "master_key", length = _MASTER_KEY_LENGTH)
+        try:
+            require_exact_length_bytes(master_key, field_name = "master_key", length = _MASTER_KEY_LENGTH)
+        except InvalidInputError as exc:
+            raise InvalidKeyError("restored master key is invalid") from exc
 
         self._master_key = master_key
 
         if self._meta_path.exists():
-            raw_meta = json.loads(self._meta_path.read_text(encoding = "utf-8"))
+            try:
+                raw_meta = json.loads(self._meta_path.read_text(encoding = "utf-8"))
+            except json.JSONDecodeError as exc:
+                raise MalformedDataError("keystore.json contains invalid JSON") from exc
             require_instance(raw_meta, dict, field_name = "keystore_metadata", error_cls = MalformedDataError)
             self._validate_metadata(raw_meta)
             self._meta = raw_meta
