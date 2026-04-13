@@ -17,6 +17,7 @@ __all__ = [
     "ProtectorError",
     "ProtectorBackendUnavailableError",
     "ProtectorOperationError",
+    "ProtectorSecretNotFoundError",
     "KeyNotFoundError",
     "KeystoreNotLoadedError",
 ]
@@ -151,6 +152,13 @@ class ProtectorBackendUnavailableError(ProtectorError):
 class ProtectorOperationError(ProtectorError):
     """
     Raised when a protector backend fails during wrap/unwrap operations.
+    """
+
+
+class ProtectorSecretNotFoundError(ProtectorOperationError):
+    """
+    Raised when protector metadata is valid and the backend is reachable,
+    but the referenced protected secret does not exist.
     """
 
 

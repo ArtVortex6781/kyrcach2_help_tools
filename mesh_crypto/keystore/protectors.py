@@ -10,7 +10,7 @@ from ..errors import (
     MalformedDataError,
     UnsupportedFormatError,
     ProtectorBackendUnavailableError,
-    ProtectorOperationError
+    ProtectorOperationError, ProtectorSecretNotFoundError
 )
 
 from ..core.domain_separation import AAD_PURPOSE_WRAPPED_KEY
@@ -82,6 +82,14 @@ class PasswordProtector:
     """
     Protect master key bytes with a password-derived wrapping key.
 
+    Compatibility model:
+    - unwrap requires the same password that was used for wrap;
+    - wrapped metadata carries the scrypt parameters and salt used for derivation;
+    - local protector configuration acts as a minimum accepted unwrap policy for
+      scrypt parameters;
+    - derived_key_length is local protector configuration and must remain
+      compatible across wrap/unwrap usage.
+
     The wrapping key is derived with scrypt and the master key is encrypted
     with AES-GCM through the primitives layer.
     """
@@ -106,6 +114,36 @@ class PasswordProtector:
         if type(self.salt_len) is not int or self.salt_len < 16:
             raise InvalidInputError("salt_len must be an integer >= 16")
         require_positive_int(self.derived_key_length, field_name = "derived_key_length")
+
+    def _validate_unwrap_scrypt_policy(self, kdf_params: dict[str, int]) -> None:
+        """
+        Validate password-based unwrap policy for scrypt parameters loaded from metadata.
+
+        This validator is intentionally policy-level, not structural:
+        structural correctness of `kdf_params` must already be guaranteed by
+        WrappedKeyEnvelope validation.
+
+        :param kdf_params: Parsed scrypt parameter mapping from wrapped metadata.
+        :raises MalformedDataError: If metadata-supplied scrypt parameters violate
+            local unwrap policy.
+        """
+        if kdf_params["n"] < self.scrypt_n:
+            raise MalformedDataError(
+                f"scrypt parameter 'n' below local minimum policy: "
+                f"{kdf_params['n']} < {self.scrypt_n}"
+            )
+
+        if kdf_params["r"] < self.scrypt_r:
+            raise MalformedDataError(
+                f"scrypt parameter 'r' below local minimum policy: "
+                f"{kdf_params['r']} < {self.scrypt_r}"
+            )
+
+        if kdf_params["p"] < self.scrypt_p:
+            raise MalformedDataError(
+                f"scrypt parameter 'p' below local minimum policy: "
+                f"{kdf_params['p']} < {self.scrypt_p}"
+            )
 
     def wrap(self, master_key: bytes) -> dict[str, Any]:
         """
@@ -159,6 +197,12 @@ class PasswordProtector:
         """
         Restore plaintext master key bytes from password-based metadata.
 
+        Unwrap compatibility notes:
+        - password must match the original wrap password;
+        - wrapped metadata must satisfy the local scrypt minimum policy;
+        - authentication failure does not uniquely mean wrong password:
+          it may also indicate tampering or corrupted metadata.
+
         :param meta: Provider metadata dictionary.
         :return: Plaintext master key bytes.
         :raises MalformedDataError: If metadata shape is invalid.
@@ -171,8 +215,11 @@ class PasswordProtector:
         wrapped_raw = require_dict_field(meta, "wrapped")
         wrapped = WrappedKeyEnvelope.from_dict(wrapped_raw)
 
+        if wrapped.purpose != _MASTER_KEY_PURPOSE:
+            raise MalformedDataError("wrapped metadata has unexpected purpose")
         if wrapped.kdf != "scrypt" or wrapped.kdf_salt is None or wrapped.kdf_params is None:
             raise MalformedDataError("wrapped metadata must contain complete scrypt parameters")
+        self._validate_unwrap_scrypt_policy(wrapped.kdf_params)
 
         wrapping_key = derive_key_scrypt(
             self.password.encode("utf-8"),
@@ -250,7 +297,8 @@ class KeyringProtector:
         :return: Plaintext master key bytes.
         :raises MalformedDataError: If metadata shape is invalid.
         :raises UnsupportedFormatError: If provider metadata version/provider is unsupported.
-        :raises ProtectorOperationError: If keyring lookup fails or the referenced secret is missing.
+        :raises ProtectorOperationError: If keyring lookup fails.
+        :raises ProtectorSecretNotFoundError: If the referenced secret is missing.
         """
         require_instance(meta, dict, field_name = "meta", error_cls = MalformedDataError)
         _validate_provider_metadata_common(meta, expected_provider = _KEYRING_PROVIDER)
@@ -264,6 +312,8 @@ class KeyringProtector:
             raise ProtectorOperationError("failed to load master key from keyring") from exc
 
         if value is None:
-            raise ProtectorOperationError("no keyring secret found for provided metadata")
+            raise ProtectorSecretNotFoundError(
+                "no keyring secret found for provided metadata"
+            )
 
         return b64_decode(value, field_name = "keyring_secret")

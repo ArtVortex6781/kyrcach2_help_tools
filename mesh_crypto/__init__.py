@@ -17,6 +17,7 @@ from .errors import (
     ProtectorBackendUnavailableError,
     ProtectorError,
     ProtectorOperationError,
+    ProtectorSecretNotFoundError,
     ReplayDetectedError,
     RollbackDetectedError,
     SignatureVerificationError,
@@ -58,6 +59,7 @@ __all__ = [
     "ProtectorError",
     "ProtectorBackendUnavailableError",
     "ProtectorOperationError",
+    "ProtectorSecretNotFoundError",
     "KeyNotFoundError",
     "KeystoreNotLoadedError",
 ]
