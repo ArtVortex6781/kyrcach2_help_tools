@@ -10,7 +10,7 @@ from .kdf import derive_key_hkdf
 from .._internal import require_positive_int, require_non_empty_bytes, require_x25519_private_key, \
     require_x25519_public_key, require_optional_instance
 
-__all__ = ["derive_session_key", "derive_raw_shared_secret"]
+__all__ = ["derive_session_key"]
 
 
 def derive_raw_shared_secret(sk: X25519PrivateKey, peer_pk: X25519PublicKey) -> bytes:
