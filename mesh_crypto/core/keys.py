@@ -48,8 +48,8 @@ class SigningKeyPair:
         :raises WrongKeyTypeError: If either key object has the wrong type.
         :raises KeyMismatchError: If the public key does not match the private key.
         """
-        require_ed25519_private_key(self.sk, field_name = "Ed25519PrivateKey")
-        require_ed25519_public_key(self.pk, field_name = "Ed25519PublicKey")
+        require_ed25519_private_key(self.sk, field_name = "sk")
+        require_ed25519_public_key(self.pk, field_name = "pk")
 
         expected_pk = self.sk.public_key()
         if _export_public_key_raw(self.pk) != _export_public_key_raw(expected_pk):
@@ -83,8 +83,8 @@ class EncryptionKeyPair:
         :raises WrongKeyTypeError: If either key object has the wrong type.
         :raises KeyMismatchError: If the public key does not match the private key.
         """
-        require_x25519_private_key(self.sk, field_name = "X25519PrivateKey")
-        require_x25519_public_key(self.pk, field_name = "X25519PublicKey")
+        require_x25519_private_key(self.sk, field_name = "sk")
+        require_x25519_public_key(self.pk, field_name = "pk")
 
         expected_pk = self.sk.public_key()
         if _export_public_key_raw(self.pk) != _export_public_key_raw(expected_pk):

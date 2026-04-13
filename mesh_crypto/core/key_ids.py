@@ -39,7 +39,7 @@ class KeyIdHelpers:
 
         :param data: Raw UUID bytes.
         :return: Parsed KeyId.
-        :raises InvalidKeyError: If the input cannot be parsed as UUID bytes.
+        :raises InvalidInputError: If the input cannot be parsed as UUID bytes.
         """
         try:
             return uuid.UUID(bytes = data)
@@ -58,7 +58,7 @@ class KeyIdHelpers:
 
         :param value: Key identifier in supported representation.
         :return: Normalized KeyId instance.
-        :raises InvalidKeyError: If the input type or value is invalid.
+        :raises InvalidInputError: If the input type or value is invalid.
         """
         if isinstance(value, uuid.UUID):
             return value
