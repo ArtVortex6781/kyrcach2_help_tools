@@ -116,7 +116,7 @@ def _validate_common_envelope_fields(*, version: int, algorithm: str,
     :param nonce: Nonce bytes.
     :param ciphertext: Ciphertext bytes.
     :raises UnsupportedFormatError: If version or algorithm is unsupported.
-    :raises InvalidInputError: If runtime envelope construction uses invalid argument types.
+    :raises MalformedDataError: If runtime envelope construction uses invalid argument types.
     """
     _validate_version(version)
     _validate_algorithm(algorithm = algorithm, allowed_algorithms = allowed_algorithms)
