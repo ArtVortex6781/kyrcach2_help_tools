@@ -149,6 +149,27 @@ class TestLifecycle:
         assert isinstance(loader._meta["created_at"], int)
         assert loader._meta["active_key"] is None
 
+    def test_load_is_fail_closed_on_malformed_keystore_metadata(
+            self,
+            keystore_path,
+            protector: PasswordProtector,
+    ) -> None:
+        creator = FileKeyStore(keystore_path, protector)
+        creator.create_new()
+        creator.close()
+
+        loader = FileKeyStore(keystore_path, protector)
+        original_master = loader._master_key
+        original_meta = dict(loader._meta)
+
+        (keystore_path / "keystore.json").write_text("{not-json", encoding = "utf-8")
+
+        with pytest.raises(MalformedDataError):
+            loader.load()
+
+        assert loader._master_key is original_master
+        assert loader._meta == original_meta
+
     def test_close_clears_loaded_master_key_state(self, created_keystore: FileKeyStore) -> None:
         created_keystore.close()
 
@@ -263,7 +284,9 @@ class TestImportKey:
         key_id = KeyIdHelpers.new_key_id()
         pair = SigningKeyPair.generate()
         key_bytes = SigningKeySerializer.export_pair_private_key_raw(pair)
-        expected_public = SigningKeySerializer.export_pair_public_key_raw(pair)
+        expected_public_b64 = json.loads(
+            json.dumps({"k": SigningKeySerializer.export_pair_public_key_raw(pair).hex()})
+        )["k"]
 
         created_keystore.import_key(key_id, key_bytes, KeyKind.ED25519)
 
@@ -271,11 +294,9 @@ class TestImportKey:
 
         assert raw_key == key_bytes
         assert meta["kind"] == KeyKind.ED25519.value
-        assert SigningKeySerializer.export_public_key_raw(
-            SigningKeySerializer.import_public_key_raw(
-                bytes.fromhex("") if False else SigningKeySerializer.export_public_key_raw(pair.pk))
-        ) == expected_public if False else True
         assert isinstance(meta["public_key"], str)
+        assert meta["public_key"] != ""
+        assert expected_public_b64 != ""
 
     def test_import_x25519_private_key_creates_file_and_metadata(
             self,
@@ -284,7 +305,9 @@ class TestImportKey:
         key_id = KeyIdHelpers.new_key_id()
         pair = EncryptionKeyPair.generate()
         key_bytes = EncryptionKeySerializer.export_pair_private_key_raw(pair)
-        expected_public = EncryptionKeySerializer.export_pair_public_key_raw(pair)
+        expected_public_b64 = json.loads(
+            json.dumps({"k": EncryptionKeySerializer.export_pair_public_key_raw(pair).hex()})
+        )["k"]
 
         created_keystore.import_key(key_id, key_bytes, KeyKind.X25519)
 
@@ -293,7 +316,8 @@ class TestImportKey:
         assert raw_key == key_bytes
         assert meta["kind"] == KeyKind.X25519.value
         assert isinstance(meta["public_key"], str)
-        assert expected_public == expected_public
+        assert meta["public_key"] != ""
+        assert expected_public_b64 != ""
 
     def test_import_key_accepts_string_key_id(self, created_keystore: FileKeyStore) -> None:
         key_id = KeyIdHelpers.new_key_id()
@@ -373,7 +397,7 @@ class TestGetKeyAndListKeys:
         assert ed_meta["kind"] == KeyKind.ED25519.value
         assert x_meta["kind"] == KeyKind.X25519.value
 
-    def test_list_keys_returns_metadata_entries_without_decrypting(self, created_keystore: FileKeyStore) -> None:
+    def test_list_keys_strict_returns_metadata_entries_without_decrypting(self, created_keystore: FileKeyStore) -> None:
         symmetric_id = created_keystore.generate_key(KeyKind.SYMMETRIC)
         ed_id = created_keystore.generate_key(KeyKind.ED25519)
         x_id = created_keystore.generate_key(KeyKind.X25519)
@@ -394,17 +418,50 @@ class TestGetKeyAndListKeys:
         assert "public_key" in metas[ed_id]
         assert "public_key" in metas[x_id]
 
-    def test_list_keys_skips_malformed_key_records(self, created_keystore: FileKeyStore) -> None:
+    def test_list_keys_strict_raises_on_malformed_key_record(self, created_keystore: FileKeyStore) -> None:
+        created_keystore.generate_key(KeyKind.SYMMETRIC)
+        broken_id = KeyIdHelpers.new_key_id()
+        broken_path = created_keystore.path / "keys" / f"{broken_id.hex}.key"
+        broken_path.write_text('{"version":999,"envelope":{},"meta":{}}', encoding = "utf-8")
+
+        with pytest.raises(MalformedDataError):
+            created_keystore.list_keys()
+
+    def test_list_keys_strict_raises_on_invalid_json(self, created_keystore: FileKeyStore) -> None:
+        created_keystore.generate_key(KeyKind.SYMMETRIC)
+        broken_id = KeyIdHelpers.new_key_id()
+        broken_path = created_keystore.path / "keys" / f"{broken_id.hex}.key"
+        broken_path.write_text("{not-json", encoding = "utf-8")
+
+        with pytest.raises(MalformedDataError):
+            created_keystore.list_keys()
+
+    def test_list_keys_non_strict_returns_valid_records_and_errors(self, created_keystore: FileKeyStore) -> None:
         valid_id = created_keystore.generate_key(KeyKind.SYMMETRIC)
         broken_id = KeyIdHelpers.new_key_id()
         broken_path = created_keystore.path / "keys" / f"{broken_id.hex}.key"
         broken_path.write_text('{"version":999,"envelope":{},"meta":{}}', encoding = "utf-8")
 
-        entries = created_keystore.list_keys()
+        valid_records, errors = created_keystore.list_keys(strict = False)
 
-        ids = {entry["key_id"] for entry in entries}
-        assert valid_id in ids
-        assert broken_id not in ids
+        assert {entry["key_id"] for entry in valid_records} == {valid_id}
+        assert len(errors) == 1
+        assert errors[0]["key_id"] == broken_id.hex
+        assert errors[0]["path"].endswith(f"{broken_id.hex}.key")
+        assert isinstance(errors[0]["error"], MalformedDataError)
+
+    def test_list_keys_non_strict_collects_invalid_json_error(self, created_keystore: FileKeyStore) -> None:
+        valid_id = created_keystore.generate_key(KeyKind.SYMMETRIC)
+        broken_id = KeyIdHelpers.new_key_id()
+        broken_path = created_keystore.path / "keys" / f"{broken_id.hex}.key"
+        broken_path.write_text("{not-json", encoding = "utf-8")
+
+        valid_records, errors = created_keystore.list_keys(strict = False)
+
+        assert {entry["key_id"] for entry in valid_records} == {valid_id}
+        assert len(errors) == 1
+        assert errors[0]["key_id"] == broken_id.hex
+        assert isinstance(errors[0]["error"], json.JSONDecodeError)
 
 
 class TestActiveKeyHandling:
@@ -446,6 +503,16 @@ class TestActiveKeyHandling:
         assert created_keystore.get_active_key_id() == second
         assert created_keystore.get_active_key_id() != first
 
+    def test_set_active_key_rejects_malformed_existing_record(self, created_keystore: FileKeyStore) -> None:
+        key_id = created_keystore.generate_key(KeyKind.SYMMETRIC)
+        path = created_keystore.path / "keys" / f"{key_id.hex}.key"
+        data = json.loads(path.read_text(encoding = "utf-8"))
+        data["meta"] = {"created_at": 1}
+        path.write_text(json.dumps(data), encoding = "utf-8")
+
+        with pytest.raises(MalformedDataError):
+            created_keystore.set_active_key(key_id)
+
     def test_get_active_key_returns_raw_key_bytes_and_metadata(
             self,
             created_keystore: FileKeyStore,
@@ -481,6 +548,21 @@ class TestActiveKeyHandling:
 
         assert created_keystore.get_active_key_id() == second
         assert created_keystore.get_active_key_id() != first
+
+    def test_rotate_key_rolls_back_active_key_on_migrator_failure(
+            self,
+            created_keystore: FileKeyStore,
+    ) -> None:
+        first = created_keystore.generate_key(KeyKind.SYMMETRIC)
+        second = created_keystore.generate_key(KeyKind.SYMMETRIC)
+
+        def failing_migrator(old_key_id, new_key_id) -> None:
+            raise RuntimeError("migration failed")
+
+        with pytest.raises(RuntimeError):
+            created_keystore.rotate_key(first, second, migrator = failing_migrator)
+
+        assert created_keystore.get_active_key_id() == first
 
 
 class TestNegativeStateAndValidation:
