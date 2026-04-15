@@ -18,7 +18,7 @@ from ..errors import (
     InvalidKeyError,
     KeyNotFoundError,
     KeystoreNotLoadedError,
-    MalformedDataError,
+    MalformedDataError, UnsupportedFormatError,
 )
 from ..primitives.aead import decrypt, encrypt
 from ..primitives.envelopes import AeadEnvelope
@@ -139,6 +139,11 @@ class FileKeyStore:
         """
         Load wrapped master key metadata and restore the plaintext master key.
 
+        The load operation is fail-closed:
+        - in-memory state is updated only after all required metadata has been
+          successfully parsed and validated;
+        - if loading fails at any stage, the keystore remains unloaded.
+
         :raises FileNotFoundError: If master metadata file is missing.
         :raises MalformedDataError: If metadata files are malformed or not valid JSON objects.
         :raises InvalidKeyError: If the restored master key is invalid.
@@ -158,8 +163,6 @@ class FileKeyStore:
         except InvalidInputError as exc:
             raise InvalidKeyError("restored master key is invalid") from exc
 
-        self._master_key = master_key
-
         if self._meta_path.exists():
             try:
                 raw_meta = json.loads(self._meta_path.read_text(encoding = "utf-8"))
@@ -167,13 +170,16 @@ class FileKeyStore:
                 raise MalformedDataError("keystore.json contains invalid JSON") from exc
             require_instance(raw_meta, dict, field_name = "keystore_metadata", error_cls = MalformedDataError)
             self._validate_metadata(raw_meta)
-            self._meta = raw_meta
+            validated_meta = raw_meta
         else:
-            self._meta = {
+            validated_meta = {
                 "version": _METADATA_VERSION,
                 "created_at": int(time.time()),
                 "active_key": None,
             }
+
+        self._master_key = master_key
+        self._meta = validated_meta
 
     def close(self) -> None:
         """
@@ -521,13 +527,30 @@ class FileKeyStore:
         )
         return key_bytes, meta
 
-    def list_keys(self) -> list[dict[str, Any]]:
+    def list_keys(self, *, strict: bool = True) -> list[dict[str, Any]] | tuple[
+        list[dict[str, Any]], list[dict[str, Any]]]:
         """
         List stored keys without decrypting raw key material.
 
-        :return: List of dictionaries with `key_id` and `meta`.
+        In strict mode, malformed key records fail closed and abort the operation.
+        In non-strict mode, malformed records are collected and returned separately.
+
+        :param strict: Whether to fail on the first malformed key record.
+        :return:
+            - if strict=True: list of dictionaries with `key_id` and `meta`
+            - if strict=False: tuple of (`valid_records`, `errors`)
+        :raises MalformedDataError: If a key record is malformed in strict mode.
         """
         out: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+
+        handled_error_types = (
+            json.JSONDecodeError,
+            MalformedDataError,
+            InvalidInputError,
+            InvalidKeyError,
+            UnsupportedFormatError,
+        )
 
         for path in sorted(self._keys_dir.glob("*.key")):
             try:
@@ -537,10 +560,22 @@ class FileKeyStore:
                 meta = require_dict_field(raw, "meta")
                 key_id = KeyIdHelpers.normalize_key_id(path.stem)
                 out.append({"key_id": key_id, "meta": meta})
-            except Exception:
-                continue
+            except handled_error_types as exc:
+                if strict:
+                    if isinstance(exc, json.JSONDecodeError):
+                        raise MalformedDataError(f"key record '{path.name}' contains invalid JSON") from exc
+                    raise
+                errors.append(
+                    {
+                        "key_id": path.stem,
+                        "path": str(path),
+                        "error": exc,
+                    }
+                )
 
-        return out
+        if strict:
+            return out
+        return out, errors
 
     # ==============================
     # Active key handling
@@ -552,10 +587,12 @@ class FileKeyStore:
 
         :param key_id: Key identifier.
         :raises KeyNotFoundError: If the key does not exist.
+        :raises MalformedDataError: If the key record is malformed.
+        :raises InvalidKeyError: If the key record cannot be decrypted or restored safely.
         """
         normalized_key_id = KeyIdHelpers.normalize_key_id(key_id)
-        if not self._key_file_path(normalized_key_id).exists():
-            raise KeyNotFoundError(str(normalized_key_id))
+
+        self.get_key(normalized_key_id)
 
         self._meta["active_key"] = str(normalized_key_id)
         self._write_meta()
@@ -585,10 +622,7 @@ class FileKeyStore:
     def rotate_key(self, old_key_id: KeyId | str | bytes, new_key_id: KeyId | str | bytes,
                    migrator: Callable[[KeyId, KeyId], None] | None = None) -> None:
         """
-        Baseline active-key switch helper.
-
-        This is not a full rotation policy. It only updates the active key and
-        optionally invokes a migration callback.
+        Baseline active-key switch helper with best-effort rollback on migration failure.
 
         :param old_key_id: Previous key identifier.
         :param new_key_id: New active key identifier.
@@ -599,5 +633,10 @@ class FileKeyStore:
 
         self.set_active_key(normalized_new)
 
-        if migrator is not None:
+        if migrator is None:
+            return
+        try:
             migrator(normalized_old, normalized_new)
+        except Exception:
+            self.set_active_key(normalized_old)
+            raise
