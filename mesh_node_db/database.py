@@ -344,6 +344,7 @@ class NodeDatabase:
                 f"Unsupported schema version: {version}. Expected: {self.SCHEMA_VERSION}."
             )
 
+        self._validate_schema_shape()
         self._initialized = True
 
     def get_schema_version(self) -> int:
@@ -476,6 +477,51 @@ class NodeDatabase:
             self._conn.execute("PRAGMA busy_timeout = 5000;")
         except sqlite3.Error as exc:
             raise NodeDBError(f"Failed to configure database connection: {exc}") from exc
+
+    def _validate_schema_shape(self) -> None:
+        """
+        Validate that required tables contain the expected minimum set of columns.
+
+        This is a fail-fast compatibility check for existing databases. It does not
+        attempt to fully validate every SQLite detail, but it ensures that the
+        structural shape required by repositories is present.
+
+        :raises SchemaError: if a required table is missing or does not contain all
+            required columns.
+        """
+
+        expected_columns = {
+            "schema_version": {"id", "version"},
+            "peers": {"peer_id", "display_name", "public_key", "created_at", "updated_at"},
+            "chats": {"chat_id", "chat_type", "chat_name", "created_at", "updated_at"},
+            "chat_participants": {"chat_id", "peer_id", "joined_at"},
+            "attachments": {"attachment_hash", "file_path"},
+            "messages": {
+                "message_id",
+                "chat_id",
+                "sender_id",
+                "created_at",
+                "payload",
+                "attachment_hash",
+            },
+        }
+
+        for table_name, required_columns in expected_columns.items():
+            try:
+                rows = self._executor.fetchall(f"PRAGMA table_info({table_name})")
+            except NodeDBError as exc:
+                raise SchemaError(f"Failed to inspect table '{table_name}': {exc}") from exc
+
+            if not rows:
+                raise SchemaError(f"Required table is missing or invalid: {table_name}")
+
+            actual_columns = {str(row["name"]) for row in rows}
+            missing_columns = required_columns - actual_columns
+            if missing_columns:
+                missing_str = ", ".join(sorted(missing_columns))
+                raise SchemaError(
+                    f"Table '{table_name}' is missing required columns: {missing_str}"
+                )
 
     def _wire_repositories(self) -> None:
         """
