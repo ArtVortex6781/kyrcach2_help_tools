@@ -7,6 +7,9 @@ __all__ = [
     "SchemaError",
     "MigrationError",
     "TransactionError",
+    "DatabaseExecutionError",
+    "ConstraintError",
+    "OperationalStorageError",
 ]
 
 
@@ -15,7 +18,7 @@ class NodeDBError(Exception):
 
 
 class InvalidRecordError(NodeDBError):
-    """Raised when a typed record or record input is invalid."""
+    """Raised when a typed record or storage input is invalid."""
 
 
 class RecordNotFoundError(NodeDBError):
@@ -26,9 +29,21 @@ class SchemaError(NodeDBError):
     """Raised when schema bootstrap or schema validation fails."""
 
 
-class MigrationError(NodeDBError):
+class MigrationError(SchemaError):
     """Raised when a schema migration fails."""
 
 
 class TransactionError(NodeDBError):
-    """Raised when a database transaction fails."""
+    """Raised when a grouped database transaction fails."""
+
+
+class DatabaseExecutionError(NodeDBError):
+    """Raised when a low-level database execution step fails."""
+
+
+class ConstraintError(DatabaseExecutionError):
+    """Raised when a database constraint is violated."""
+
+
+class OperationalStorageError(DatabaseExecutionError):
+    """Raised when a low-level operational database error occurs."""
