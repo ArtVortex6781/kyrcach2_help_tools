@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from ._validation import (
@@ -34,10 +36,10 @@ def _validate_created_updated_timestamps(*, created_at: int, updated_at: int) ->
         raise InvalidRecordError("updated_at must be >= created_at")
 
 
-def _validate_chat_like_fields(*, chat_id: str, chat_type: str,
-                               chat_name: bytes, created_at: int, updated_at: int) -> None:
+def _validate_chat_like_fields(*, chat_id: str, chat_type: str, chat_name: bytes,
+                               created_at: int, updated_at: int) -> None:
     """
-    Validate common structural invariants shared by chat-like records.
+    Validate structural invariants shared by chat-like records.
 
     :param chat_id: chat identifier
     :param chat_type: chat type string
