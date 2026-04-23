@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from mesh_node_db import ChatRecord, NodeDatabase, PeerRecord, SchemaError
+from mesh_node_db import ChatRecord, NodeDatabase, PeerRecord, SchemaError, NodeDBError
 
 
 @pytest.fixture
@@ -156,3 +156,13 @@ class TestInitialize:
 
         with pytest.raises(SchemaError):
             db.initialize()
+
+    def test_get_schema_version_before_initialize_raises_nodedb_error(self, opened_db: NodeDatabase) -> None:
+        with pytest.raises(NodeDBError):
+            opened_db.get_schema_version()
+
+    def test_get_schema_version_after_close_raises_nodedb_error(self, initialized_db: NodeDatabase) -> None:
+        initialized_db.close()
+
+        with pytest.raises(NodeDBError):
+            initialized_db.get_schema_version()

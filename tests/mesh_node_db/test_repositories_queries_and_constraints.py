@@ -272,6 +272,19 @@ class TestJoinQueries:
             ("chat-c", 0),
         ]
 
+    def test_list_by_chat_with_sender_display_name_invalid_pagination_arguments_raise_invalid_record_error(
+            self,
+            db: NodeDatabase,
+    ) -> None:
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_with_sender_display_name("chat-1", before_created_at = 100)
+
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_with_sender_display_name("chat-1", before_message_id = "msg-1")
+
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_with_sender_display_name("chat-1", limit = 0)
+
 
 class TestConstraintsAndReferentialBehavior:
     def test_add_message_with_missing_chat_raises_constraint_error(self, db: NodeDatabase) -> None:
@@ -332,3 +345,15 @@ class TestConstraintsAndReferentialBehavior:
         assert db.chat_participants.read("chat-1", "peer-2") is None
         assert db.messages.read("msg-1") is None
         assert db.messages.read("msg-2") is None
+
+
+class TestQueryValidation:
+    def test_list_with_participant_count_invalid_limit_or_offset_raise_invalid_record_error(
+            self,
+            db: NodeDatabase,
+    ) -> None:
+        with pytest.raises(InvalidRecordError):
+            db.chats.list_with_participant_count(limit = 0)
+
+        with pytest.raises(InvalidRecordError):
+            db.chats.list_with_participant_count(offset = -1)
