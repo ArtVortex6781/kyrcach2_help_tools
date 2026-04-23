@@ -1,13 +1,12 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from ._validation import (
     require_bytes,
-    require_int,
+    require_non_negative_int,
     require_non_empty_str,
-    require_optional_str
+    require_optional_str,
 )
+from .errors import InvalidRecordError
 
 __all__ = [
     "PeerRecord",
@@ -18,6 +17,42 @@ __all__ = [
     "ChatMessageWithSenderRecord",
     "ChatWithParticipantCountRecord",
 ]
+
+
+def _validate_created_updated_timestamps(*, created_at: int, updated_at: int) -> None:
+    """
+    Validate paired created/updated timestamps.
+
+    :param created_at: creation timestamp
+    :param updated_at: last update timestamp
+    :raises InvalidRecordError: if timestamp invariants are violated
+    """
+    require_non_negative_int(created_at, field_name = "created_at")
+    require_non_negative_int(updated_at, field_name = "updated_at")
+
+    if updated_at < created_at:
+        raise InvalidRecordError("updated_at must be >= created_at")
+
+
+def _validate_chat_like_fields(*, chat_id: str, chat_type: str,
+                               chat_name: bytes, created_at: int, updated_at: int) -> None:
+    """
+    Validate common structural invariants shared by chat-like records.
+
+    :param chat_id: chat identifier
+    :param chat_type: chat type string
+    :param chat_name: chat display name bytes
+    :param created_at: creation timestamp
+    :param updated_at: last update timestamp
+    :raises InvalidRecordError: if any invariant is violated
+    """
+    require_non_empty_str(chat_id, field_name = "chat_id")
+    require_non_empty_str(chat_type, field_name = "chat_type")
+    require_bytes(chat_name, field_name = "chat_name")
+    _validate_created_updated_timestamps(
+        created_at = created_at,
+        updated_at = updated_at,
+    )
 
 
 @dataclass(frozen = True)
@@ -37,8 +72,10 @@ class PeerRecord:
         require_non_empty_str(self.peer_id, field_name = "peer_id")
         require_bytes(self.display_name, field_name = "display_name")
         require_bytes(self.public_key, field_name = "public_key")
-        require_int(self.created_at, field_name = "created_at")
-        require_int(self.updated_at, field_name = "updated_at")
+        _validate_created_updated_timestamps(
+            created_at = self.created_at,
+            updated_at = self.updated_at,
+        )
 
 
 @dataclass(frozen = True)
@@ -55,11 +92,13 @@ class ChatRecord:
         """
         Validate structural invariants of ChatRecord.
         """
-        require_non_empty_str(self.chat_id, field_name = "chat_id")
-        require_non_empty_str(self.chat_type, field_name = "chat_type")
-        require_bytes(self.chat_name, field_name = "chat_name")
-        require_int(self.created_at, field_name = "created_at")
-        require_int(self.updated_at, field_name = "updated_at")
+        _validate_chat_like_fields(
+            chat_id = self.chat_id,
+            chat_type = self.chat_type,
+            chat_name = self.chat_name,
+            created_at = self.created_at,
+            updated_at = self.updated_at,
+        )
 
 
 @dataclass(frozen = True)
@@ -76,7 +115,7 @@ class ChatParticipantRecord:
         """
         require_non_empty_str(self.chat_id, field_name = "chat_id")
         require_non_empty_str(self.peer_id, field_name = "peer_id")
-        require_int(self.joined_at, field_name = "joined_at")
+        require_non_negative_int(self.joined_at, field_name = "joined_at")
 
 
 @dataclass(frozen = True)
@@ -97,7 +136,7 @@ class MessageRecord:
         require_non_empty_str(self.message_id, field_name = "message_id")
         require_non_empty_str(self.chat_id, field_name = "chat_id")
         require_non_empty_str(self.sender_id, field_name = "sender_id")
-        require_int(self.created_at, field_name = "created_at")
+        require_non_negative_int(self.created_at, field_name = "created_at")
         require_bytes(self.payload, field_name = "payload")
         require_optional_str(self.attachment_hash, field_name = "attachment_hash")
 
@@ -137,7 +176,7 @@ class ChatMessageWithSenderRecord:
         require_non_empty_str(self.chat_id, field_name = "chat_id")
         require_non_empty_str(self.sender_id, field_name = "sender_id")
         require_bytes(self.sender_display_name, field_name = "sender_display_name")
-        require_int(self.created_at, field_name = "created_at")
+        require_non_negative_int(self.created_at, field_name = "created_at")
         require_bytes(self.payload, field_name = "payload")
         require_optional_str(self.attachment_hash, field_name = "attachment_hash")
 
@@ -157,9 +196,11 @@ class ChatWithParticipantCountRecord:
         """
         Validate structural invariants of ChatWithParticipantCountRecord.
         """
-        require_non_empty_str(self.chat_id, field_name = "chat_id")
-        require_non_empty_str(self.chat_type, field_name = "chat_type")
-        require_bytes(self.chat_name, field_name = "chat_name")
-        require_int(self.created_at, field_name = "created_at")
-        require_int(self.updated_at, field_name = "updated_at")
-        require_int(self.participant_count, field_name = "participant_count")
+        _validate_chat_like_fields(
+            chat_id = self.chat_id,
+            chat_type = self.chat_type,
+            chat_name = self.chat_name,
+            created_at = self.created_at,
+            updated_at = self.updated_at,
+        )
+        require_non_negative_int(self.participant_count, field_name = "participant_count")
