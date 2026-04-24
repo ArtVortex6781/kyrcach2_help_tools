@@ -11,6 +11,7 @@ from .errors import (
     OperationalStorageError,
     SchemaError,
     TransactionError,
+    ConfigurationError
 )
 
 __all__ = ["NodeDatabase"]
@@ -153,7 +154,9 @@ class NodeDatabase:
             display_name BLOB NOT NULL,
             public_key BLOB NOT NULL,
             created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            deleted_at INTEGER NULL
         )
         """,
         """
@@ -190,7 +193,7 @@ class NodeDatabase:
             payload BLOB NOT NULL,
             attachment_hash TEXT NULL,
             FOREIGN KEY (chat_id) REFERENCES chats(chat_id) ON DELETE CASCADE,
-            FOREIGN KEY (sender_id) REFERENCES peers(peer_id) ON DELETE CASCADE,
+            FOREIGN KEY (sender_id) REFERENCES peers(peer_id),
             FOREIGN KEY (attachment_hash) REFERENCES attachments(attachment_hash) ON DELETE SET NULL
         )
         """,
@@ -201,6 +204,10 @@ class NodeDatabase:
         """
         CREATE INDEX IF NOT EXISTS idx_chat_participants_peer
         ON chat_participants(peer_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_peers_is_deleted_created
+        ON peers(is_deleted, created_at, peer_id)
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_messages_chat_created_message
@@ -226,12 +233,13 @@ class NodeDatabase:
         :param synchronous: PRAGMA synchronous value
         """
         self._path = path
-        self._journal_mode = journal_mode
-        self._synchronous = synchronous
+        self._journal_mode = self._normalize_journal_mode(journal_mode)
+        self._synchronous = self._normalize_synchronous(synchronous)
 
         self._conn: Optional[sqlite3.Connection] = None
         self._executor: Optional[_DatabaseExecutor] = None
         self._initialized: bool = False
+        self._transaction_depth: int = 0
 
         self.peers: Optional[PeerRepository] = None
         self.chats: Optional[ChatRepository] = None
@@ -345,6 +353,8 @@ class NodeDatabase:
             )
 
         self._validate_schema_shape()
+        self._validate_foreign_keys()
+        self._validate_required_indexes()
         self._initialized = True
 
     def get_schema_version(self) -> int:
@@ -377,14 +387,14 @@ class NodeDatabase:
         This method is intended for multi-step mutation sequences that must
         succeed or fail as one unit.
 
-        The callback receives this NodeDatabase instance and may use the public
-        repository objects exposed by it.
-
         :param fn: callback executed inside one SQL transaction
         :return: callback return value
         :raises TransactionError: if the grouped transaction fails.
         """
         self._require_initialized()
+
+        if not callable(fn):
+            raise TransactionError("fn must be callable.")
 
         try:
             with self._transaction():
@@ -401,14 +411,18 @@ class NodeDatabase:
         """
         Execute one internal SQL transaction.
 
-        This helper centralizes BEGIN / COMMIT / ROLLBACK policy and is not part
-        of the public package API.
+        Nested transactions are not supported in this phase and fail fast.
 
         :raises TransactionError: if SQL transaction handling fails.
         """
         self._require_open()
 
+        if self._transaction_depth != 0:
+            raise TransactionError("Nested transactions are not supported.")
+
         cur = self._conn.cursor()
+        self._transaction_depth = 1
+
         try:
             cur.execute("BEGIN;")
             yield
@@ -426,6 +440,7 @@ class NodeDatabase:
                 pass
             raise
         finally:
+            self._transaction_depth = 0
             cur.close()
 
     # -----------------------
@@ -462,6 +477,50 @@ class NodeDatabase:
         if not self._initialized:
             raise NodeDBError("Database schema is not initialized. Call initialize() first.")
 
+    @staticmethod
+    def _normalize_journal_mode(journal_mode: str) -> str:
+        """
+        Normalize and validate PRAGMA journal_mode value.
+
+        :param journal_mode: requested SQLite journal mode
+        :return: normalized journal mode
+        :raises NodeDBError: if the value is unsupported.
+        """
+        if not isinstance(journal_mode, str):
+            raise ConfigurationError("journal_mode must be str.")
+
+        normalized = journal_mode.strip().upper()
+        allowed = {"WAL"}
+
+        if normalized not in allowed:
+            raise ConfigurationError(
+                f"Unsupported journal_mode: {journal_mode!r}. Allowed values: {sorted(allowed)}."
+            )
+
+        return normalized
+
+    @staticmethod
+    def _normalize_synchronous(synchronous: str) -> str:
+        """
+        Normalize and validate PRAGMA synchronous value.
+
+        :param synchronous: requested SQLite synchronous mode
+        :return: normalized synchronous mode
+        :raises NodeDBError: if the value is unsupported.
+        """
+        if not isinstance(synchronous, str):
+            raise ConfigurationError("synchronous must be str.")
+
+        normalized = synchronous.strip().upper()
+        allowed = {"NORMAL", "FULL"}
+
+        if normalized not in allowed:
+            raise ConfigurationError(
+                f"Unsupported synchronous: {synchronous!r}. Allowed values: {sorted(allowed)}."
+            )
+
+        return normalized
+
     def _configure_connection(self) -> None:
         """
         Configure SQLite connection PRAGMAs for mesh_node_db.
@@ -480,22 +539,38 @@ class NodeDatabase:
 
     def _validate_schema_shape(self) -> None:
         """
-        Validate that required tables contain the expected minimum set of columns.
+        Validate required tables and columns for the current schema version.
 
-        This is a fail-fast compatibility check for existing databases. It does not
-        attempt to fully validate every SQLite detail, but it ensures that the
-        structural shape required by repositories is present.
-
-        :raises SchemaError: if a required table is missing or does not contain all
-            required columns.
+        :raises SchemaError: if required tables or columns are missing.
         """
 
         expected_columns = {
             "schema_version": {"id", "version"},
-            "peers": {"peer_id", "display_name", "public_key", "created_at", "updated_at"},
-            "chats": {"chat_id", "chat_type", "chat_name", "created_at", "updated_at"},
-            "chat_participants": {"chat_id", "peer_id", "joined_at"},
-            "attachments": {"attachment_hash", "file_path"},
+            "peers": {
+                "peer_id",
+                "display_name",
+                "public_key",
+                "created_at",
+                "updated_at",
+                "is_deleted",
+                "deleted_at",
+            },
+            "chats": {
+                "chat_id",
+                "chat_type",
+                "chat_name",
+                "created_at",
+                "updated_at",
+            },
+            "chat_participants": {
+                "chat_id",
+                "peer_id",
+                "joined_at",
+            },
+            "attachments": {
+                "attachment_hash",
+                "file_path",
+            },
             "messages": {
                 "message_id",
                 "chat_id",
@@ -512,16 +587,86 @@ class NodeDatabase:
             except NodeDBError as exc:
                 raise SchemaError(f"Failed to inspect table '{table_name}': {exc}") from exc
 
-            if not rows:
-                raise SchemaError(f"Required table is missing or invalid: {table_name}")
-
             actual_columns = {str(row["name"]) for row in rows}
             missing_columns = required_columns - actual_columns
             if missing_columns:
-                missing_str = ", ".join(sorted(missing_columns))
                 raise SchemaError(
-                    f"Table '{table_name}' is missing required columns: {missing_str}"
+                    f"Table {table_name} is missing required columns: {sorted(missing_columns)}"
                 )
+
+    def _validate_foreign_keys(self) -> None:
+        """
+        Validate critical foreign-key relationships.
+
+        :raises SchemaError: if required foreign keys are missing or mismatched.
+        """
+        self._require_executor()
+
+        expected_fks = {
+            "chat_participants": {
+                ("chat_id", "chats", "chat_id", "CASCADE"),
+                ("peer_id", "peers", "peer_id", "CASCADE"),
+            },
+            "messages": {
+                ("chat_id", "chats", "chat_id", "CASCADE"),
+                ("sender_id", "peers", "peer_id", "CASCADE"),
+                ("attachment_hash", "attachments", "attachment_hash", "SET NULL"),
+            },
+        }
+
+        for table_name, expected in expected_fks.items():
+            rows = self._executor.fetchall(f"PRAGMA foreign_key_list({table_name})")
+            actual = {
+                (
+                    str(row["from"]),
+                    str(row["table"]),
+                    str(row["to"]),
+                    str(row["on_delete"]).upper(),
+                )
+                for row in rows
+            }
+
+            missing = expected - actual
+            if missing:
+                raise SchemaError(
+                    f"Table {table_name} is missing required foreign keys: {sorted(missing)}"
+                )
+
+    def _validate_required_indexes(self) -> None:
+        """
+        Validate presence of critical indexes.
+
+        :raises SchemaError: if required indexes are missing.
+        """
+        self._require_executor()
+
+        expected_indexes = {
+            "idx_peers_is_deleted_created",
+            "idx_chats_chat_type",
+            "idx_chat_participants_peer",
+            "idx_messages_chat_created_message",
+            "idx_messages_sender_created",
+            "idx_messages_attachment_hash",
+        }
+
+        tables = (
+            "peers",
+            "chats",
+            "chat_participants",
+            "messages",
+            "attachments",
+        )
+
+        actual_indexes: set[str] = set()
+
+        for table_name in tables:
+            rows = self._executor.fetchall(f"PRAGMA index_list({table_name})")
+            for row in rows:
+                actual_indexes.add(str(row["name"]))
+
+        missing = expected_indexes - actual_indexes
+        if missing:
+            raise SchemaError(f"Missing required indexes: {sorted(missing)}")
 
     def _wire_repositories(self) -> None:
         """

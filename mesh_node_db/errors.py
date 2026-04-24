@@ -2,6 +2,7 @@ from __future__ import annotations
 
 __all__ = [
     "NodeDBError",
+    "ConfigurationError",
     "InvalidRecordError",
     "RecordNotFoundError",
     "SchemaError",
@@ -15,6 +16,10 @@ __all__ = [
 
 class NodeDBError(Exception):
     """Base error for mesh_node_db operations."""
+
+
+class ConfigurationError(NodeDBError):
+    """Raised when database configuration input is invalid."""
 
 
 class InvalidRecordError(NodeDBError):

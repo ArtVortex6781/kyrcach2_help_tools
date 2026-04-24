@@ -50,7 +50,7 @@ def make_chat(
         chat_type: str = "group",
         chat_name: bytes | None = None,
         created_at: int = 100,
-        updated_at: int = 100,
+        updated_at: int = 200,
 ) -> ChatRecord:
     return ChatRecord(
         chat_id = chat_id,
@@ -251,9 +251,9 @@ class TestJoinQueries:
         db.peers.add(make_peer("peer-2", b"Bob"))
         db.peers.add(make_peer("peer-3", b"Carol"))
 
-        chat_a = make_chat("chat-a", created_at = 100)
-        chat_b = make_chat("chat-b", created_at = 200)
-        chat_c = make_chat("chat-c", created_at = 300)
+        chat_a = make_chat("chat-a", created_at = 100, updated_at = 200)
+        chat_b = make_chat("chat-b", created_at = 200, updated_at = 300)
+        chat_c = make_chat("chat-c", created_at = 300, updated_at = 400)
 
         db.chats.add(chat_a)
         db.chats.add(chat_b)
