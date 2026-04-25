@@ -33,6 +33,8 @@ def make_peer(
     public_key: bytes = b"alice-pk",
     created_at: int = 100,
     updated_at: int = 100,
+    is_deleted: bool = False,
+    deleted_at: int | None = None,
 ) -> PeerRecord:
     return PeerRecord(
         peer_id = peer_id,
@@ -40,6 +42,8 @@ def make_peer(
         public_key = public_key,
         created_at = created_at,
         updated_at = updated_at,
+        is_deleted = is_deleted,
+        deleted_at = deleted_at,
     )
 
 
@@ -100,7 +104,7 @@ def make_message(
 
 
 class TestPeerRepository:
-    def test_add_read_update_delete_and_list_all(self, db: NodeDatabase) -> None:
+    def test_add_read_update_list_active_and_list_deleted(self, db: NodeDatabase) -> None:
         first = make_peer("peer-1", b"Alice", b"pk-1", 100, 101)
         second = make_peer("peer-2", b"Bob", b"pk-2", 200, 201)
 
@@ -109,17 +113,66 @@ class TestPeerRepository:
 
         assert db.peers.read("peer-1") == first
         assert db.peers.read("peer-2") == second
+        assert db.peers.list_active() == [first, second]
+        assert db.peers.list_deleted() == []
 
         updated = make_peer("peer-1", b"Alice Updated", b"pk-1-new", 100, 150)
         db.peers.update(updated)
 
-        assert db.peers.read("peer-1") == updated
-        assert db.peers.list_all() == [updated, second]
+        restored = db.peers.read("peer-1")
+        assert restored == updated
+        assert db.peers.list_active() == [updated, second]
 
-        db.peers.delete("peer-1")
+    def test_update_does_not_change_created_at(self, db: NodeDatabase) -> None:
+        original = make_peer("peer-1", b"Alice", b"pk-1", 100, 110)
+        db.peers.add(original)
 
-        assert db.peers.read("peer-1") is None
-        assert db.peers.list_all() == [second]
+        db.peers.update(
+            make_peer(
+                "peer-1",
+                b"Alice Updated",
+                b"pk-1-new",
+                created_at = 300,
+                updated_at = 400,
+            )
+        )
+
+        restored = db.peers.read("peer-1")
+        assert restored is not None
+        assert restored.created_at == 100
+        assert restored.updated_at == 400
+        assert restored.display_name == b"Alice Updated"
+        assert restored.public_key == b"pk-1-new"
+
+    def test_soft_delete_marks_peer_deleted_removes_memberships_and_keeps_messages(
+        self,
+        db: NodeDatabase,
+    ) -> None:
+        peer = make_peer("peer-1", b"Alice", b"pk-1", 100, 100)
+        other_peer = make_peer("peer-2", b"Bob", b"pk-2", 110, 110)
+        chat = make_chat("chat-1", "group", b"Group", 200, 200)
+        participant = make_participant("chat-1", "peer-1", 300)
+        message = make_message("msg-1", "chat-1", "peer-1", 400, b"hello")
+
+        db.peers.add(peer)
+        db.peers.add(other_peer)
+        db.chats.add(chat)
+        db.chat_participants.add(participant)
+        db.messages.add(message)
+
+        db.peers.soft_delete("peer-1", deleted_at = 500)
+
+        restored_peer = db.peers.read("peer-1")
+        restored_message = db.messages.read("msg-1")
+
+        assert restored_peer is not None
+        assert restored_peer.is_deleted is True
+        assert restored_peer.deleted_at == 500
+        assert restored_peer.updated_at == 500
+        assert db.chat_participants.read("chat-1", "peer-1") is None
+        assert restored_message == message
+        assert db.peers.list_active() == [other_peer]
+        assert db.peers.list_deleted() == [restored_peer]
 
     def test_read_missing_returns_none(self, db: NodeDatabase) -> None:
         assert db.peers.read("missing-peer") is None
@@ -128,13 +181,13 @@ class TestPeerRepository:
         with pytest.raises(RecordNotFoundError):
             db.peers.update(make_peer("missing-peer"))
 
-    def test_delete_missing_raises_record_not_found_error(self, db: NodeDatabase) -> None:
+    def test_soft_delete_missing_raises_record_not_found_error(self, db: NodeDatabase) -> None:
         with pytest.raises(RecordNotFoundError):
-            db.peers.delete("missing-peer")
+            db.peers.soft_delete("missing-peer", deleted_at = 100)
 
 
 class TestChatRepository:
-    def test_add_read_update_delete_list_all_and_list_by_type(self, db: NodeDatabase) -> None:
+    def test_add_read_update_list_all_and_list_by_type(self, db: NodeDatabase) -> None:
         first = make_chat("chat-1", "direct", b"Direct", 100, 101)
         second = make_chat("chat-2", "group", b"Group", 200, 201)
         third = make_chat("chat-3", "group", b"Group 2", 300, 301)
@@ -148,15 +201,23 @@ class TestChatRepository:
         assert db.chats.list_all() == [first, second, third]
         assert db.chats.list_by_type("group") == [second, third]
 
-        updated = make_chat("chat-2", "group", b"Group Updated", 200, 250)
-        db.chats.update(updated)
+        db.chats.update(make_chat("chat-2", "other-type", b"Group Updated", 240, 250))
 
-        assert db.chats.read("chat-2") == updated
+        restored = db.chats.read("chat-2")
+        assert restored is not None
+        assert restored.chat_id == "chat-2"
+        assert restored.chat_type == "group"
+        assert restored.chat_name == b"Group Updated"
+        assert restored.created_at == 200
+        assert restored.updated_at == 250
+
+    def test_delete_removes_chat(self, db: NodeDatabase) -> None:
+        chat = make_chat("chat-1", "group", b"Group", 100, 100)
+        db.chats.add(chat)
 
         db.chats.delete("chat-1")
 
         assert db.chats.read("chat-1") is None
-        assert db.chats.list_all() == [updated, third]
 
     def test_read_missing_returns_none(self, db: NodeDatabase) -> None:
         assert db.chats.read("missing-chat") is None
@@ -319,10 +380,10 @@ class TestRepositoryValidation:
 
     def test_invalid_list_arguments_raise_invalid_record_error(self, db: NodeDatabase) -> None:
         with pytest.raises(InvalidRecordError):
-            db.peers.list_all(limit = 0)
+            db.peers.list_active(limit = 0)
 
         with pytest.raises(InvalidRecordError):
-            db.peers.list_all(offset = -1)
+            db.peers.list_deleted(offset = -1)
 
         with pytest.raises(InvalidRecordError):
             db.chats.list_all(limit = 1001)
