@@ -4,10 +4,10 @@ import sqlite3
 from typing import Optional
 
 from ._validation import (
-    require_int,
     require_limit,
     require_non_empty_str,
-    require_offset
+    require_offset,
+    require_non_negative_int
 )
 from .database import _DatabaseExecutor
 from .errors import InvalidRecordError, RecordNotFoundError
@@ -113,9 +113,11 @@ class PeerRepository(BaseRepository):
                 display_name,
                 public_key,
                 created_at,
-                updated_at
+                updated_at,
+                is_deleted,
+                deleted_at
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             self._params_from_record(record),
         )
@@ -132,7 +134,14 @@ class PeerRepository(BaseRepository):
 
         row = self._fetchone(
             """
-            SELECT peer_id, display_name, public_key, created_at, updated_at
+            SELECT
+                peer_id,
+                display_name,
+                public_key,
+                created_at,
+                updated_at,
+                is_deleted,
+                deleted_at
             FROM peers
             WHERE peer_id = ?
             """,
@@ -144,7 +153,7 @@ class PeerRepository(BaseRepository):
 
     def update(self, record: PeerRecord) -> None:
         """
-        Update one peer record.
+        Update mutable peer fields.
 
         :param record: peer record with updated values
         :raises RecordNotFoundError: if the peer does not exist.
@@ -154,14 +163,12 @@ class PeerRepository(BaseRepository):
             UPDATE peers
             SET display_name = ?,
                 public_key = ?,
-                created_at = ?,
                 updated_at = ?
             WHERE peer_id = ?
             """,
             (
                 record.display_name,
                 record.public_key,
-                record.created_at,
                 record.updated_at,
                 record.peer_id,
             ),
@@ -173,31 +180,59 @@ class PeerRepository(BaseRepository):
             key_value = record.peer_id,
         )
 
-    def delete(self, peer_id: str) -> None:
+    def soft_delete(self, peer_id: str, deleted_at: int) -> None:
         """
-        Delete one peer by peer_id.
+        Mark one peer as deleted using tombstone semantics.
+
+        This operation does not physically remove the peer row. Historical
+        metadata remains available for message history. Existing chat
+        memberships of this peer are removed separately.
+
+        This method must be called only inside NodeDatabase.run_in_transaction(...)
+        when used as part of peer removal workflow.
 
         :param peer_id: logical peer identifier
-        :raises InvalidRecordError: if peer_id is invalid.
+        :param deleted_at: tombstone timestamp
+        :raises InvalidRecordError: if input values are invalid.
         :raises RecordNotFoundError: if the peer does not exist.
         """
         require_non_empty_str(peer_id, field_name = "peer_id")
+        require_non_negative_int(deleted_at, field_name = "deleted_at")
 
         cur = self._execute(
-            "DELETE FROM peers WHERE peer_id = ?",
-            (peer_id,),
+            """
+            UPDATE peers
+            SET is_deleted = ?,
+                deleted_at = ?,
+                updated_at = ?
+            WHERE peer_id = ?
+            """,
+            (
+                1,
+                deleted_at,
+                deleted_at,
+                peer_id,
+            ),
         )
         self._require_row_affected(
             cur.rowcount,
-            operation = "delete",
+            operation = "soft_delete",
             entity_name = "peer",
             key_value = peer_id,
         )
 
-    def list_all(self, limit: int = 100,
-                 offset: int = 0) -> list[PeerRecord]:
+        self._execute(
+            """
+            DELETE FROM chat_participants
+            WHERE peer_id = ?
+            """,
+            (peer_id,),
+        )
+
+    def list_active(self, limit: int = 100,
+                    offset: int = 0) -> list[PeerRecord]:
         """
-        List peers ordered by created_at and peer_id.
+        List active peers ordered by created_at and peer_id.
 
         :param limit: maximum number of rows to return
         :param offset: number of rows to skip
@@ -209,9 +244,49 @@ class PeerRepository(BaseRepository):
 
         rows = self._fetchall(
             """
-            SELECT peer_id, display_name, public_key, created_at, updated_at
+            SELECT
+                peer_id,
+                display_name,
+                public_key,
+                created_at,
+                updated_at,
+                is_deleted,
+                deleted_at
             FROM peers
+            WHERE is_deleted = 0
             ORDER BY created_at ASC, peer_id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        return [self._row_to_record(row) for row in rows]
+
+    def list_deleted(self, limit: int = 100,
+                     offset: int = 0) -> list[PeerRecord]:
+        """
+        List tombstoned peers ordered by deleted_at and peer_id.
+
+        :param limit: maximum number of rows to return
+        :param offset: number of rows to skip
+        :return: list of PeerRecord
+        :raises InvalidRecordError: if limit or offset is invalid.
+        """
+        require_limit(limit, max_value = 1000)
+        require_offset(offset)
+
+        rows = self._fetchall(
+            """
+            SELECT
+                peer_id,
+                display_name,
+                public_key,
+                created_at,
+                updated_at,
+                is_deleted,
+                deleted_at
+            FROM peers
+            WHERE is_deleted = 1
+            ORDER BY deleted_at ASC, peer_id ASC
             LIMIT ? OFFSET ?
             """,
             (limit, offset),
@@ -232,6 +307,8 @@ class PeerRepository(BaseRepository):
             record.public_key,
             record.created_at,
             record.updated_at,
+            int(record.is_deleted),
+            record.deleted_at,
         )
 
     @staticmethod
@@ -248,6 +325,10 @@ class PeerRepository(BaseRepository):
             public_key = bytes(row["public_key"]),
             created_at = int(row["created_at"]),
             updated_at = int(row["updated_at"]),
+            is_deleted = bool(row["is_deleted"]),
+            deleted_at = (
+                None if row["deleted_at"] is None else int(row["deleted_at"])
+            ),
         )
 
 
@@ -306,16 +387,12 @@ class ChatRepository(BaseRepository):
         cur = self._execute(
             """
             UPDATE chats
-            SET chat_type = ?,
-                chat_name = ?,
-                created_at = ?,
+            SET chat_name = ?,
                 updated_at = ?
             WHERE chat_id = ?
             """,
             (
-                record.chat_type,
                 record.chat_name,
-                record.created_at,
                 record.updated_at,
                 record.chat_id,
             ),
@@ -329,7 +406,8 @@ class ChatRepository(BaseRepository):
 
     def delete(self, chat_id: str) -> None:
         """
-        Delete one chat by chat_id.
+       Cascade deletion of a chat with the corresponding ID,
+       i.e., all messages in it and all its participants are deleted
 
         :param chat_id: logical chat identifier
         :raises InvalidRecordError: if chat_id is invalid.
@@ -758,7 +836,7 @@ class MessageRepository(BaseRepository):
             return [self._row_to_record(row) for row in rows]
 
         if before_created_at is not None and before_message_id is not None:
-            require_int(before_created_at, field_name = "before_created_at")
+            require_non_negative_int(before_created_at, field_name = "before_created_at")
             require_non_empty_str(before_message_id, field_name = "before_message_id")
 
             rows = self._fetchall(
@@ -827,8 +905,8 @@ class MessageRepository(BaseRepository):
         :raises InvalidRecordError: if input values are invalid.
         """
         require_non_empty_str(chat_id, field_name = "chat_id")
-        require_int(start_created_at, field_name = "start_created_at")
-        require_int(end_created_at, field_name = "end_created_at")
+        require_non_negative_int(start_created_at, field_name = "start_created_at")
+        require_non_negative_int(end_created_at, field_name = "end_created_at")
         require_limit(limit, max_value = 1000)
 
         if start_created_at > end_created_at:
@@ -894,7 +972,7 @@ class MessageRepository(BaseRepository):
             return [self._row_to_sender_record(row) for row in rows]
 
         if before_created_at is not None and before_message_id is not None:
-            require_int(before_created_at, field_name = "before_created_at")
+            require_non_negative_int(before_created_at, field_name = "before_created_at")
             require_non_empty_str(before_message_id, field_name = "before_message_id")
 
             rows = self._fetchall(
