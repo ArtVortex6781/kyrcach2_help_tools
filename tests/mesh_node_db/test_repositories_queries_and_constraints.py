@@ -30,11 +30,13 @@ def db(db_path) -> NodeDatabase:
 
 
 def make_peer(
-        peer_id: str,
-        display_name: bytes,
-        public_key: bytes | None = None,
-        created_at: int = 100,
-        updated_at: int = 100,
+    peer_id: str,
+    display_name: bytes,
+    public_key: bytes | None = None,
+    created_at: int = 100,
+    updated_at: int = 101,
+    is_deleted: bool = False,
+    deleted_at: int | None = None,
 ) -> PeerRecord:
     return PeerRecord(
         peer_id = peer_id,
@@ -42,15 +44,17 @@ def make_peer(
         public_key = public_key if public_key is not None else f"pk:{peer_id}".encode(),
         created_at = created_at,
         updated_at = updated_at,
+        is_deleted = is_deleted,
+        deleted_at = deleted_at,
     )
 
 
 def make_chat(
-        chat_id: str,
-        chat_type: str = "group",
-        chat_name: bytes | None = None,
-        created_at: int = 100,
-        updated_at: int = 200,
+    chat_id: str,
+    chat_type: str = "group",
+    chat_name: bytes | None = None,
+    created_at: int = 100,
+    updated_at: int = 101,
 ) -> ChatRecord:
     return ChatRecord(
         chat_id = chat_id,
@@ -77,12 +81,12 @@ def make_attachment(attachment_hash: str, file_path: bytes) -> AttachmentRecord:
 
 
 def make_message(
-        message_id: str,
-        chat_id: str,
-        sender_id: str,
-        created_at: int,
-        payload: bytes,
-        attachment_hash: str | None = None,
+    message_id: str,
+    chat_id: str,
+    sender_id: str,
+    created_at: int,
+    payload: bytes,
+    attachment_hash: str | None = None,
 ) -> MessageRecord:
     return MessageRecord(
         message_id = message_id,
@@ -142,8 +146,8 @@ class TestMessageQueries:
         )
 
     def test_list_by_chat_invalid_pagination_arguments_raise_invalid_record_error(
-            self,
-            db: NodeDatabase,
+        self,
+        db: NodeDatabase,
     ) -> None:
         with pytest.raises(InvalidRecordError):
             db.messages.list_by_chat("chat-1", before_created_at = 100)
@@ -153,6 +157,9 @@ class TestMessageQueries:
 
         with pytest.raises(InvalidRecordError):
             db.messages.list_by_chat("chat-1", limit = 0)
+
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat("chat-1", before_created_at = -1, before_message_id = "msg-1")
 
     def test_list_by_sender_returns_messages_sorted_desc(self, db: NodeDatabase) -> None:
         db.peers.add(make_peer("peer-1", b"Alice"))
@@ -185,17 +192,27 @@ class TestMessageQueries:
         assert db.messages.list_by_chat_and_time_range("chat-1", 150, 250) == [msg_2, msg_3, msg_4]
 
     def test_list_by_chat_and_time_range_invalid_range_raises_invalid_record_error(
-            self,
-            db: NodeDatabase,
+        self,
+        db: NodeDatabase,
     ) -> None:
         with pytest.raises(InvalidRecordError):
             db.messages.list_by_chat_and_time_range("chat-1", 200, 100)
 
+    def test_list_by_chat_and_time_range_negative_timestamps_raise_invalid_record_error(
+        self,
+        db: NodeDatabase,
+    ) -> None:
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_and_time_range("chat-1", -1, 100)
+
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_and_time_range("chat-1", 0, -1)
+
 
 class TestJoinQueries:
     def test_list_by_chat_with_sender_display_name_returns_projection_records(
-            self,
-            db: NodeDatabase,
+        self,
+        db: NodeDatabase,
     ) -> None:
         db.peers.add(make_peer("peer-1", b"Alice"))
         db.peers.add(make_peer("peer-2", b"Bob"))
@@ -223,10 +240,10 @@ class TestJoinQueries:
         db.chats.add(make_chat("chat-1"))
 
         for message in (
-                make_message("msg-1", "chat-1", "peer-1", 300, b"1"),
-                make_message("msg-3", "chat-1", "peer-1", 200, b"3"),
-                make_message("msg-2", "chat-1", "peer-1", 200, b"2"),
-                make_message("msg-0", "chat-1", "peer-1", 100, b"0"),
+            make_message("msg-1", "chat-1", "peer-1", 300, b"1"),
+            make_message("msg-3", "chat-1", "peer-1", 200, b"3"),
+            make_message("msg-2", "chat-1", "peer-1", 200, b"2"),
+            make_message("msg-0", "chat-1", "peer-1", 100, b"0"),
         ):
             db.messages.add(message)
 
@@ -243,17 +260,37 @@ class TestJoinQueries:
         assert [row.message_id for row in second_page] == ["msg-2", "msg-0"]
         assert {row.message_id for row in first_page}.isdisjoint({row.message_id for row in second_page})
 
+    def test_list_by_chat_with_sender_display_name_invalid_pagination_arguments_raise_invalid_record_error(
+        self,
+        db: NodeDatabase,
+    ) -> None:
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_with_sender_display_name("chat-1", before_created_at = 100)
+
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_with_sender_display_name("chat-1", before_message_id = "msg-1")
+
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_with_sender_display_name("chat-1", limit = 0)
+
+        with pytest.raises(InvalidRecordError):
+            db.messages.list_by_chat_with_sender_display_name(
+                "chat-1",
+                before_created_at = -1,
+                before_message_id = "msg-1",
+            )
+
     def test_list_with_participant_count_returns_projection_records_and_zero_counts(
-            self,
-            db: NodeDatabase,
+        self,
+        db: NodeDatabase,
     ) -> None:
         db.peers.add(make_peer("peer-1", b"Alice"))
         db.peers.add(make_peer("peer-2", b"Bob"))
         db.peers.add(make_peer("peer-3", b"Carol"))
 
-        chat_a = make_chat("chat-a", created_at = 100, updated_at = 200)
-        chat_b = make_chat("chat-b", created_at = 200, updated_at = 300)
-        chat_c = make_chat("chat-c", created_at = 300, updated_at = 400)
+        chat_a = make_chat("chat-a", created_at = 100)
+        chat_b = make_chat("chat-b", created_at = 200, updated_at = 201)
+        chat_c = make_chat("chat-c", created_at = 300, updated_at = 301)
 
         db.chats.add(chat_a)
         db.chats.add(chat_b)
@@ -272,18 +309,15 @@ class TestJoinQueries:
             ("chat-c", 0),
         ]
 
-    def test_list_by_chat_with_sender_display_name_invalid_pagination_arguments_raise_invalid_record_error(
-            self,
-            db: NodeDatabase,
+    def test_list_with_participant_count_invalid_limit_or_offset_raise_invalid_record_error(
+        self,
+        db: NodeDatabase,
     ) -> None:
         with pytest.raises(InvalidRecordError):
-            db.messages.list_by_chat_with_sender_display_name("chat-1", before_created_at = 100)
+            db.chats.list_with_participant_count(limit = 0)
 
         with pytest.raises(InvalidRecordError):
-            db.messages.list_by_chat_with_sender_display_name("chat-1", before_message_id = "msg-1")
-
-        with pytest.raises(InvalidRecordError):
-            db.messages.list_by_chat_with_sender_display_name("chat-1", limit = 0)
+            db.chats.list_with_participant_count(offset = -1)
 
 
 class TestConstraintsAndReferentialBehavior:
@@ -300,8 +334,8 @@ class TestConstraintsAndReferentialBehavior:
             db.messages.add(make_message("msg-1", "chat-1", "missing-peer", 100, b"a"))
 
     def test_add_participant_with_missing_chat_or_peer_raises_constraint_error(
-            self,
-            db: NodeDatabase,
+        self,
+        db: NodeDatabase,
     ) -> None:
         db.peers.add(make_peer("peer-1", b"Alice"))
         db.chats.add(make_chat("chat-1"))
@@ -346,14 +380,23 @@ class TestConstraintsAndReferentialBehavior:
         assert db.messages.read("msg-1") is None
         assert db.messages.read("msg-2") is None
 
+    def test_soft_delete_peer_keeps_messages_and_removes_memberships(self, db: NodeDatabase) -> None:
+        db.peers.add(make_peer("peer-1", b"Alice"))
+        db.peers.add(make_peer("peer-2", b"Bob"))
+        db.chats.add(make_chat("chat-1"))
 
-class TestQueryValidation:
-    def test_list_with_participant_count_invalid_limit_or_offset_raise_invalid_record_error(
-            self,
-            db: NodeDatabase,
-    ) -> None:
-        with pytest.raises(InvalidRecordError):
-            db.chats.list_with_participant_count(limit = 0)
+        participant = make_participant("chat-1", "peer-1", 100)
+        message = make_message("msg-1", "chat-1", "peer-1", 200, b"hello")
 
-        with pytest.raises(InvalidRecordError):
-            db.chats.list_with_participant_count(offset = -1)
+        db.chat_participants.add(participant)
+        db.messages.add(message)
+
+        db.peers.soft_delete("peer-1", deleted_at = 300)
+
+        restored_peer = db.peers.read("peer-1")
+        restored_message = db.messages.read("msg-1")
+
+        assert restored_peer is not None
+        assert restored_peer.is_deleted is True
+        assert db.chat_participants.read("chat-1", "peer-1") is None
+        assert restored_message == message
