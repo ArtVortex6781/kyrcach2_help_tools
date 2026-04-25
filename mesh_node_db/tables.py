@@ -7,6 +7,8 @@ from ._validation import (
     require_non_negative_int,
     require_non_empty_str,
     require_optional_str,
+    require_optional_non_negative_int,
+    require_instance
 )
 from .errors import InvalidRecordError
 
@@ -66,6 +68,8 @@ class PeerRecord:
     public_key: bytes
     created_at: int
     updated_at: int
+    is_deleted: bool
+    deleted_at: int | None
 
     def __post_init__(self) -> None:
         """
@@ -78,6 +82,18 @@ class PeerRecord:
             created_at = self.created_at,
             updated_at = self.updated_at,
         )
+        require_instance(self.is_deleted, bool, field_name = "is_deleted")
+        require_optional_non_negative_int(self.deleted_at, field_name = "deleted_at")
+
+        if not self.is_deleted and self.deleted_at is not None:
+            raise InvalidRecordError(
+                "deleted_at must be None when is_deleted = 0"
+            )
+
+        if self.is_deleted and self.deleted_at is None:
+            raise InvalidRecordError(
+                "deleted_at must be set when is_deleted = 1"
+            )
 
 
 @dataclass(frozen = True)
