@@ -26,6 +26,7 @@ __all__ = [
     "NodeDBError",
     "InvalidRecordError",
     "RecordNotFoundError",
+    "ConfigurationError",
     "SchemaError",
     "MigrationError",
     "TransactionError",

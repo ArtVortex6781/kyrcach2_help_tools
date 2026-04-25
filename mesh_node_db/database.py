@@ -600,7 +600,6 @@ class NodeDatabase:
 
         :raises SchemaError: if required foreign keys are missing or mismatched.
         """
-        self._require_executor()
 
         expected_fks = {
             "chat_participants": {
@@ -609,7 +608,7 @@ class NodeDatabase:
             },
             "messages": {
                 ("chat_id", "chats", "chat_id", "CASCADE"),
-                ("sender_id", "peers", "peer_id", "CASCADE"),
+                ("sender_id", "peers", "peer_id", "NO ACTION"),
                 ("attachment_hash", "attachments", "attachment_hash", "SET NULL"),
             },
         }
@@ -638,7 +637,6 @@ class NodeDatabase:
 
         :raises SchemaError: if required indexes are missing.
         """
-        self._require_executor()
 
         expected_indexes = {
             "idx_peers_is_deleted_created",
