@@ -14,6 +14,7 @@ __all__ = [
     "require_int",
     "require_positive_int",
     "require_non_negative_int",
+    "require_optional_non_negative_int",
     "require_optional_str",
     "require_limit",
     "require_offset",
@@ -153,6 +154,20 @@ def require_non_negative_int(value: object, *, field_name: str) -> None:
     require_int(value, field_name = field_name)
     if value < 0:
         raise InvalidRecordError(f"{field_name} must be a non-negative integer")
+
+
+def require_optional_non_negative_int(value: object, *, field_name: str) -> None:
+    """
+    Validate that a value is either None or a strict non-negative int.
+
+    :param value: value to validate
+    :param field_name: field name used in error messages
+    :raises InvalidRecordError: if the value is neither None nor a strict non-negative int.
+    """
+    if value is None:
+        return
+
+    require_non_negative_int(value, field_name = field_name)
 
 
 def require_optional_str(value: object, *, field_name: str) -> None:
