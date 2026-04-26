@@ -725,10 +725,11 @@ class MessageRepository(BaseRepository):
                 chat_id,
                 sender_id,
                 created_at,
+                updated_at,
                 payload,
                 attachment_hash
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             self._params_from_record(record),
         )
@@ -745,7 +746,14 @@ class MessageRepository(BaseRepository):
 
         row = self._fetchone(
             """
-            SELECT message_id, chat_id, sender_id, created_at, payload, attachment_hash
+            SELECT
+                message_id,
+                chat_id,
+                sender_id,
+                created_at,
+                updated_at,
+                payload,
+                attachment_hash
             FROM messages
             WHERE message_id = ?
             """,
@@ -759,17 +767,19 @@ class MessageRepository(BaseRepository):
         """
         Update mutable content fields of one message record.
 
-        :param record: message record with updated payload/attachment values
+        :param record: message record with updated content values
         :raises RecordNotFoundError: if the message does not exist.
         """
         cur = self._execute(
             """
             UPDATE messages
-            SET payload = ?,
+            SET updated_at = ?,
+                payload = ?,
                 attachment_hash = ?
             WHERE message_id = ?
             """,
             (
+                record.updated_at,
                 record.payload,
                 record.attachment_hash,
                 record.message_id,
@@ -825,7 +835,14 @@ class MessageRepository(BaseRepository):
         if before_created_at is None and before_message_id is None:
             rows = self._fetchall(
                 """
-                SELECT message_id, chat_id, sender_id, created_at, payload, attachment_hash
+                SELECT
+                    message_id,
+                    chat_id,
+                    sender_id,
+                    created_at,
+                    updated_at,
+                    payload,
+                    attachment_hash
                 FROM messages
                 WHERE chat_id = ?
                 ORDER BY created_at DESC, message_id DESC
@@ -836,12 +853,25 @@ class MessageRepository(BaseRepository):
             return [self._row_to_record(row) for row in rows]
 
         if before_created_at is not None and before_message_id is not None:
-            require_non_negative_int(before_created_at, field_name = "before_created_at")
-            require_non_empty_str(before_message_id, field_name = "before_message_id")
+            require_non_negative_int(
+                before_created_at,
+                field_name = "before_created_at",
+            )
+            require_non_empty_str(
+                before_message_id,
+                field_name = "before_message_id",
+            )
 
             rows = self._fetchall(
                 """
-                SELECT message_id, chat_id, sender_id, created_at, payload, attachment_hash
+                SELECT
+                    message_id,
+                    chat_id,
+                    sender_id,
+                    created_at,
+                    updated_at,
+                    payload,
+                    attachment_hash
                 FROM messages
                 WHERE chat_id = ?
                   AND (
@@ -865,8 +895,8 @@ class MessageRepository(BaseRepository):
             "Pagination requires both before_created_at and before_message_id, or neither."
         )
 
-    def list_by_sender(self, sender_id: str,
-                       limit: int = 100, offset: int = 0) -> list[MessageRecord]:
+    def list_by_sender(self, sender_id: str, limit: int = 100,
+                       offset: int = 0) -> list[MessageRecord]:
         """
         List messages sent by one peer.
 
@@ -882,7 +912,14 @@ class MessageRepository(BaseRepository):
 
         rows = self._fetchall(
             """
-            SELECT message_id, chat_id, sender_id, created_at, payload, attachment_hash
+            SELECT
+                message_id,
+                chat_id,
+                sender_id,
+                created_at,
+                updated_at,
+                payload,
+                attachment_hash
             FROM messages
             WHERE sender_id = ?
             ORDER BY created_at DESC, message_id DESC
@@ -905,8 +942,14 @@ class MessageRepository(BaseRepository):
         :raises InvalidRecordError: if input values are invalid.
         """
         require_non_empty_str(chat_id, field_name = "chat_id")
-        require_non_negative_int(start_created_at, field_name = "start_created_at")
-        require_non_negative_int(end_created_at, field_name = "end_created_at")
+        require_non_negative_int(
+            start_created_at,
+            field_name = "start_created_at",
+        )
+        require_non_negative_int(
+            end_created_at,
+            field_name = "end_created_at",
+        )
         require_limit(limit, max_value = 1000)
 
         if start_created_at > end_created_at:
@@ -916,7 +959,14 @@ class MessageRepository(BaseRepository):
 
         rows = self._fetchall(
             """
-            SELECT message_id, chat_id, sender_id, created_at, payload, attachment_hash
+            SELECT
+                message_id,
+                chat_id,
+                sender_id,
+                created_at,
+                updated_at,
+                payload,
+                attachment_hash
             FROM messages
             WHERE chat_id = ?
               AND created_at >= ?
@@ -958,6 +1008,7 @@ class MessageRepository(BaseRepository):
                     m.sender_id,
                     p.display_name AS sender_display_name,
                     m.created_at,
+                    m.updated_at,
                     m.payload,
                     m.attachment_hash
                 FROM messages AS m
@@ -972,8 +1023,14 @@ class MessageRepository(BaseRepository):
             return [self._row_to_sender_record(row) for row in rows]
 
         if before_created_at is not None and before_message_id is not None:
-            require_non_negative_int(before_created_at, field_name = "before_created_at")
-            require_non_empty_str(before_message_id, field_name = "before_message_id")
+            require_non_negative_int(
+                before_created_at,
+                field_name = "before_created_at",
+            )
+            require_non_empty_str(
+                before_message_id,
+                field_name = "before_message_id",
+            )
 
             rows = self._fetchall(
                 """
@@ -983,6 +1040,7 @@ class MessageRepository(BaseRepository):
                     m.sender_id,
                     p.display_name AS sender_display_name,
                     m.created_at,
+                    m.updated_at,
                     m.payload,
                     m.attachment_hash
                 FROM messages AS m
@@ -1023,6 +1081,7 @@ class MessageRepository(BaseRepository):
             record.chat_id,
             record.sender_id,
             record.created_at,
+            record.updated_at,
             record.payload,
             record.attachment_hash,
         )
@@ -1040,6 +1099,7 @@ class MessageRepository(BaseRepository):
             chat_id = str(row["chat_id"]),
             sender_id = str(row["sender_id"]),
             created_at = int(row["created_at"]),
+            updated_at = int(row["updated_at"]),
             payload = bytes(row["payload"]),
             attachment_hash = (
                 None if row["attachment_hash"] is None else str(row["attachment_hash"])
@@ -1060,6 +1120,7 @@ class MessageRepository(BaseRepository):
             sender_id = str(row["sender_id"]),
             sender_display_name = bytes(row["sender_display_name"]),
             created_at = int(row["created_at"]),
+            updated_at = int(row["updated_at"]),
             payload = bytes(row["payload"]),
             attachment_hash = (
                 None if row["attachment_hash"] is None else str(row["attachment_hash"])

@@ -187,6 +187,7 @@ class ChatMessageWithSenderRecord:
     sender_id: str
     sender_display_name: bytes
     created_at: int
+    updated_at: int
     payload: bytes
     attachment_hash: str | None
 
@@ -198,7 +199,10 @@ class ChatMessageWithSenderRecord:
         require_non_empty_str(self.chat_id, field_name = "chat_id")
         require_non_empty_str(self.sender_id, field_name = "sender_id")
         require_bytes(self.sender_display_name, field_name = "sender_display_name")
-        require_non_negative_int(self.created_at, field_name = "created_at")
+        _validate_created_updated_timestamps(
+            created_at = self.created_at,
+            updated_at = self.updated_at,
+        )
         require_bytes(self.payload, field_name = "payload")
         require_optional_str(self.attachment_hash, field_name = "attachment_hash")
 
