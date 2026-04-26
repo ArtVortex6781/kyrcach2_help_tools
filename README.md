@@ -1,86 +1,3 @@
-# mesh_node_db
-
-Минимальный локальный уровень хранения для узла(node).
-
-`mesh_node_db` предоставляет небольшой абстрактный интерфейс хранения локального состояния узла,
-используя SQLite в качестве внутренней реализации.
-
-В настоящее время модуль реализует  **Фазу 1 — Основу минимальных абстрактных баз данных узлов**.
-
-SQLite намеренно скрыт за узким API, чтобы более высокие уровни не
-зависели от SQL, курсоров или структуры таблиц.
----
-
-# Example
-
-```python
-from mesh_node_db import NodeDB
-
-db = NodeDB("node.db")
-
-db.open()
-db.initialize()
-
-db.add_message(
-    message_id="msg1",
-    chat_id="chat1",
-    sender_id="peerA",
-    payload=b"hello"
-)
-
-msg = db.get_message("msg1")
-
-messages = db.list_chat_messages("chat1", limit=50)
-
-db.close()
-```
-
----
-
-# Public API
-
-```
-NodeDB
-MessageRecord
-NodeDBError
-```
-
-Основные операции:
-
-```
-open()
-close()
-initialize()
-
-add_message()
-get_message()
-list_chat_messages()
-
-run_in_transaction()
-```
-
----
-
-# Storage model (Phase 1)
-
-Минимальная неизменяемая запись сообщения:
-
-```
-message_id
-chat_id
-sender_id
-payload (BLOB)
-created_at
-```
-
-Полезная нагрузка хранится в виде двоичного файла (blob) для обеспечения возможности последующего зашифрованного хранения.
-
----
-
-# Status
-
-Phase 1 complete.
-
 # mesh_crypto
 
 Самостоятельное криптографическое ядро проекта.
@@ -219,3 +136,160 @@ keystore.close()
 - DB integration
 - media/file chunking policy
 - transport / handshake protocol logic как часть сетевого слоя
+
+
+# mesh_node_db
+
+Типизированный storage layer для node-local состояния.
+
+`mesh_node_db` предоставляет локальное хранение данных узла на базе SQLite за типизированным API.
+Модуль включает typed records, repositories, database engine и transaction model, 
+при этом raw SQL connection handling, schema bootstrap и transaction orchestration 
+остаются внутри storage слоя.
+
+## Статус
+
+**Phase 3 завершена.**
+
+Это означает, что в `mesh_node_db` реализованы и покрыты тестами:
+
+- Типизированная архитектура хранения данных
+- Типизированные записи классов данных
+- Уровень репозитория с запросами, специфичными для сущностей
+- Механизм базы данных и обработка жизненного цикла
+- Политика транзакций для групповых записей
+- Структурированный контракт обработки ошибок базы данных
+
+## Текущая архитектура
+
+### `tables.py`
+Типизированные записи классов данных и типизированные записи проекции/результата.=
+
+### `repositories.py`
+Репозитории, SQL, сопоставление строк и записей, сопоставление записей и параметров,
+запросы, специфичные для сущностей и минимальные JOIN-запросы.
+
+### `database.py`
+Механизм базы данных, жизненный цикл SQLite, загрузка схемы, проверка схемы,
+границы транзакций, внутренний исполнитель и подключение репозитория.
+
+### `errors.py`
+Структурированная иерархия ошибок storage/database слоя.
+
+## Философия публичного API
+
+Repositories являются частью public typed storage API.
+
+Прямые read-операции допустимы, например:
+
+- `db.peers.read(...)`
+- `db.messages.read(...)`
+- `db.messages.list_by_chat(...)`
+
+Single write-операции также допустимы напрямую через repositories.
+
+Grouped multi-step writes, которые должны выполниться атомарно как одна операция,
+нужно выполнять через:
+
+- `db.run_in_transaction(...)`
+
+Это позволяет сохранить удобный repository API и при этом централизовать transaction policy в database engine.
+
+## Текущий scope хранения
+
+На текущем этапе модуль покрывает типизированное хранение для:
+
+- peers
+- chats
+- chat participants
+- messages
+- attachments
+
+## Пример использования
+
+```python
+from mesh_node_db import (
+    ChatParticipantRecord,
+    ChatRecord,
+    MessageRecord,
+    NodeDatabase,
+    PeerRecord,
+)
+
+db = NodeDatabase("node.db")
+
+db.open()
+db.initialize()
+
+db.peers.add(
+    PeerRecord(
+        peer_id = "peer_a",
+        display_name = b"Alice",
+        public_key = b"public-key-a",
+        created_at = 1,
+        updated_at = 1,
+        is_deleted = False,
+        deleted_at = None,
+    )
+)
+
+db.chats.add(
+    ChatRecord(
+        chat_id = "chat_main",
+        chat_type = "direct",
+        chat_name = b"Direct chat",
+        created_at = 1,
+        updated_at = 1,
+    )
+)
+
+db.chat_participants.add(
+    ChatParticipantRecord(
+        chat_id = "chat_main",
+        peer_id = "peer_a",
+        joined_at = 1,
+    )
+)
+
+db.messages.add(
+    MessageRecord(
+        message_id = "msg_1",
+        chat_id = "chat_main",
+        sender_id = "peer_a",
+        created_at = 1,
+        updated_at = 1,
+        payload = b"hello",
+        attachment_hash = None,
+    )
+)
+
+message = db.messages.read("msg_1")
+messages = db.messages.list_by_chat("chat_main", limit = 50)
+
+def write_batch(tx: NodeDatabase) -> None:
+    tx.messages.add(
+        MessageRecord(
+            message_id = "msg_2",
+            chat_id = "chat_main",
+            sender_id = "peer_a",
+            created_at = 2,
+            updated_at = 2,
+            payload = b"second message",
+            attachment_hash = None,
+        )
+    )
+
+db.run_in_transaction(write_batch)
+
+db.close()
+```
+
+## Не включено в третий этап.
+
+В текущий модуль ещё не входят:
+
+- интеграция с mesh_crypto
+- зашифрованное хранение
+- семантика синхронизации
+- сквозное шифрование / шифрование на уровне сообщений
+- финальная policy для media/file encryption
