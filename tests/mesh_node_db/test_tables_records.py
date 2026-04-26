@@ -140,6 +140,7 @@ class TestOtherRecords:
             chat_id = "chat-1",
             sender_id = "peer-1",
             created_at = 100,
+            updated_at = 200,
             payload = b"hello",
             attachment_hash = None,
         )
@@ -147,6 +148,8 @@ class TestOtherRecords:
         assert record.message_id == "msg-1"
         assert record.chat_id == "chat-1"
         assert record.sender_id == "peer-1"
+        assert record.created_at == 100
+        assert record.updated_at == 200
         assert record.payload == b"hello"
         assert record.attachment_hash is None
 
@@ -157,6 +160,7 @@ class TestOtherRecords:
                 chat_id = "chat-1",
                 sender_id = "peer-1",
                 created_at = -1,
+                updated_at = -10,
                 payload = b"hello",
                 attachment_hash = None,
             )
@@ -177,6 +181,7 @@ class TestOtherRecords:
             sender_id = "peer-1",
             sender_display_name = b"Alice",
             created_at = 100,
+            updated_at = 200,
             payload = b"hello",
             attachment_hash = None,
         )

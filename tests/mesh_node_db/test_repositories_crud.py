@@ -28,13 +28,13 @@ def db(db_path) -> NodeDatabase:
 
 
 def make_peer(
-    peer_id: str,
-    display_name: bytes = b"Alice",
-    public_key: bytes = b"alice-pk",
-    created_at: int = 100,
-    updated_at: int = 100,
-    is_deleted: bool = False,
-    deleted_at: int | None = None,
+        peer_id: str,
+        display_name: bytes = b"Alice",
+        public_key: bytes = b"alice-pk",
+        created_at: int = 100,
+        updated_at: int = 100,
+        is_deleted: bool = False,
+        deleted_at: int | None = None,
 ) -> PeerRecord:
     return PeerRecord(
         peer_id = peer_id,
@@ -48,11 +48,11 @@ def make_peer(
 
 
 def make_chat(
-    chat_id: str,
-    chat_type: str = "group",
-    chat_name: bytes = b"Group chat",
-    created_at: int = 200,
-    updated_at: int = 200,
+        chat_id: str,
+        chat_type: str = "group",
+        chat_name: bytes = b"Group chat",
+        created_at: int = 200,
+        updated_at: int = 200,
 ) -> ChatRecord:
     return ChatRecord(
         chat_id = chat_id,
@@ -64,9 +64,9 @@ def make_chat(
 
 
 def make_participant(
-    chat_id: str,
-    peer_id: str,
-    joined_at: int = 300,
+        chat_id: str,
+        peer_id: str,
+        joined_at: int = 300,
 ) -> ChatParticipantRecord:
     return ChatParticipantRecord(
         chat_id = chat_id,
@@ -76,8 +76,8 @@ def make_participant(
 
 
 def make_attachment(
-    attachment_hash: str,
-    file_path: bytes = b"/tmp/file.bin",
+        attachment_hash: str,
+        file_path: bytes = b"/tmp/file.bin",
 ) -> AttachmentRecord:
     return AttachmentRecord(
         attachment_hash = attachment_hash,
@@ -86,18 +86,21 @@ def make_attachment(
 
 
 def make_message(
-    message_id: str,
-    chat_id: str,
-    sender_id: str,
-    created_at: int = 400,
-    payload: bytes = b"payload",
-    attachment_hash: str | None = None,
+        message_id: str,
+        chat_id: str,
+        sender_id: str,
+        created_at: int = 100,
+        updated_at: int = 200,
+        payload: bytes = b"payload",
+        attachment_hash: str | None = None,
 ) -> MessageRecord:
+    ts = created_at if updated_at is None else updated_at
     return MessageRecord(
         message_id = message_id,
         chat_id = chat_id,
         sender_id = sender_id,
         created_at = created_at,
+        updated_at = ts,
         payload = payload,
         attachment_hash = attachment_hash,
     )
@@ -145,14 +148,14 @@ class TestPeerRepository:
         assert restored.public_key == b"pk-1-new"
 
     def test_soft_delete_marks_peer_deleted_removes_memberships_and_keeps_messages(
-        self,
-        db: NodeDatabase,
+            self,
+            db: NodeDatabase,
     ) -> None:
         peer = make_peer("peer-1", b"Alice", b"pk-1", 100, 100)
         other_peer = make_peer("peer-2", b"Bob", b"pk-2", 110, 110)
         chat = make_chat("chat-1", "group", b"Group", 200, 200)
         participant = make_participant("chat-1", "peer-1", 300)
-        message = make_message("msg-1", "chat-1", "peer-1", 400, b"hello")
+        message = make_message("msg-1", "chat-1", "peer-1", 100, 200, b"hello")
 
         db.peers.add(peer)
         db.peers.add(other_peer)
@@ -296,6 +299,7 @@ class TestMessageRepository:
             "chat-1",
             "peer-1",
             created_at = 500,
+            updated_at = 500,
             payload = b"hello",
             attachment_hash = "hash-1",
         )
@@ -307,7 +311,8 @@ class TestMessageRepository:
             "msg-1",
             "other-chat-ignored",
             "other-peer-ignored",
-            created_at = 999999,
+            created_at = 600,
+            updated_at = 700,
             payload = b"updated payload",
             attachment_hash = "hash-2",
         )
@@ -319,6 +324,7 @@ class TestMessageRepository:
         assert restored.chat_id == "chat-1"
         assert restored.sender_id == "peer-1"
         assert restored.created_at == 500
+        assert restored.updated_at == 700
         assert restored.payload == b"updated payload"
         assert restored.attachment_hash == "hash-2"
 
@@ -331,9 +337,30 @@ class TestMessageRepository:
         db.peers.add(make_peer("peer-2", b"Bob"))
         db.chats.add(make_chat("chat-1", "group"))
 
-        first = make_message("msg-1", "chat-1", "peer-1", created_at = 100, payload = b"a")
-        second = make_message("msg-2", "chat-1", "peer-1", created_at = 200, payload = b"b")
-        third = make_message("msg-3", "chat-1", "peer-2", created_at = 300, payload = b"c")
+        first = make_message(
+            "msg-1",
+            "chat-1",
+            "peer-1",
+            created_at = 100,
+            updated_at = 100,
+            payload = b"a",
+        )
+        second = make_message(
+            "msg-2",
+            "chat-1",
+            "peer-1",
+            created_at = 200,
+            updated_at = 200,
+            payload = b"b",
+        )
+        third = make_message(
+            "msg-3",
+            "chat-1",
+            "peer-2",
+            created_at = 300,
+            updated_at = 300,
+            payload = b"c",
+        )
 
         db.messages.add(first)
         db.messages.add(second)
@@ -352,6 +379,8 @@ class TestMessageRepository:
                     "missing-message",
                     "chat-1",
                     "peer-1",
+                    created_at = 500,
+                    updated_at = 600,
                     payload = b"updated",
                 )
             )
