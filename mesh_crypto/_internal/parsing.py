@@ -10,6 +10,9 @@ __all__ = [
     "require_str_field",
     "require_int_field",
     "require_dict_field",
+    "require_required_keys",
+    "require_allowed_keys",
+    "require_exact_keys"
 ]
 
 
@@ -76,3 +79,37 @@ def require_dict_field(data: dict[str, Any], field_name: str,
     """
     return require_field_instance(data, field_name,
                                   dict, error_cls = error_cls)
+
+
+def require_required_keys(data: dict[str, Any], required_keys: set[str], *, schema_name: str,
+                          error_cls: Type[MeshCryptoError] = MalformedDataError) -> None:
+    actual_keys = set(data.keys())
+    missing = required_keys - actual_keys
+
+    if missing:
+        raise error_cls(f"{schema_name} missing keys: {sorted(missing)}")
+
+
+def require_allowed_keys(data: dict[str, Any], allowed_keys: set[str], *, schema_name: str,
+                         error_cls: Type[MeshCryptoError] = MalformedDataError) -> None:
+    actual_keys = set(data.keys())
+    extra = actual_keys - allowed_keys
+
+    if extra:
+        raise error_cls(f"{schema_name} contains unexpected keys: {sorted(extra)}")
+
+
+def require_exact_keys(data: dict[str, Any], expected_keys: set[str], *, schema_name: str,
+                       error_cls: Type[MeshCryptoError] = MalformedDataError) -> None:
+    require_allowed_keys(
+        data,
+        expected_keys,
+        schema_name = schema_name,
+        error_cls = error_cls,
+    )
+    require_required_keys(
+        data,
+        expected_keys,
+        schema_name = schema_name,
+        error_cls = error_cls,
+    )

@@ -20,6 +20,9 @@ from .parsing import (
     require_field_instance,
     require_int_field,
     require_str_field,
+    require_required_keys,
+    require_allowed_keys,
+    require_exact_keys
 )
 from .validation import (
     SCRYPT_MIN_SALT_LEN,
@@ -53,6 +56,9 @@ __all__ = [
     "require_str_field",
     "require_int_field",
     "require_dict_field",
+    "require_exact_keys",
+    "require_allowed_keys",
+    "require_required_keys",
     "require_instance",
     "require_optional_instance",
     "require_bytes",

@@ -5,7 +5,7 @@ from typing import Any
 
 from ..errors import MalformedDataError, UnsupportedFormatError
 from .._internal import require_instance, require_optional_instance, SCRYPT_MIN_SALT_LEN, b64_encode, b64_decode, \
-    require_int_field, require_str_field
+    require_int_field, require_str_field, require_required_keys, require_allowed_keys, require_exact_keys
 
 __all__ = ["AeadEnvelope", "WrappedKeyEnvelope"]
 
@@ -30,52 +30,6 @@ _WRAPPED_BASE_KEY_KEYS = {"version", "algorithm", "nonce", "ciphertext", "purpos
 _AESGCM_NONCE_LEN = 12
 _AESGCM_TAG_LEN = 16
 _SCRYPT_REQUIRED_PARAMS = {"n", "r", "p"}
-
-
-def _require_required_keys(data: dict[str, Any], required_keys: set[str], *, schema_name: str) -> None:
-    """
-    Validate that a mapping contains all required keys.
-
-    :param data: Source mapping.
-    :param required_keys: Required key set.
-    :param schema_name: Human-readable schema name used in error messages.
-    :raises MalformedDataError: If required keys are missing.
-    """
-    actual_keys = set(data.keys())
-    missing = required_keys - actual_keys
-
-    if missing:
-        raise MalformedDataError(
-            f"{schema_name} missing keys: {sorted(missing)}"
-        )
-
-
-def _require_allowed_keys(data: dict[str, Any], allowed_keys: set[str], *, schema_name: str) -> None:
-    """
-    Validate that a mapping does not contain unexpected keys.
-
-    :param data: Source mapping.
-    :param allowed_keys: Allowed key set.
-    :param schema_name: Human-readable schema name used in error messages.
-    :raises MalformedDataError: If unexpected keys are present.
-    """
-    actual_keys = set(data.keys())
-    extra = actual_keys - allowed_keys
-    if extra:
-        raise MalformedDataError(f"{schema_name} contains unexpected keys: {sorted(extra)}")
-
-
-def _require_exact_keys(data: dict[str, Any], expected_keys: set[str], *, schema_name: str) -> None:
-    """
-    Validate that a mapping contains exactly the expected keys.
-
-    :param data: Source mapping.
-    :param expected_keys: Allowed and required key set.
-    :param schema_name: Human-readable schema name used in error messages.
-    :raises MalformedDataError: If keys are missing or unexpected.
-    """
-    _require_allowed_keys(data, expected_keys, schema_name = schema_name)
-    _require_required_keys(data, expected_keys, schema_name = schema_name)
 
 
 def _validate_version(version: int) -> None:
@@ -258,7 +212,7 @@ class AeadEnvelope:
         :raises UnsupportedFormatError: If version or algorithm is unsupported.
         """
         require_instance(data, dict, field_name = "data", error_cls = MalformedDataError)
-        _require_exact_keys(data, _AEAD_KEYS, schema_name = "AEAD envelope")
+        require_exact_keys(data, _AEAD_KEYS, schema_name = "AEAD envelope")
 
         version = require_int_field(data, "version")
         algorithm = require_str_field(data, "algorithm")
@@ -385,8 +339,8 @@ class WrappedKeyEnvelope:
         require_instance(data, dict, field_name = "data", error_cls = MalformedDataError)
 
         schema_name = "wrapped key envelope"
-        _require_allowed_keys(data, _WRAPPED_KEY_KEYS, schema_name = schema_name)
-        _require_required_keys(
+        require_allowed_keys(data, _WRAPPED_KEY_KEYS, schema_name = schema_name)
+        require_required_keys(
             data,
             _WRAPPED_BASE_KEY_KEYS,
             schema_name = schema_name,
