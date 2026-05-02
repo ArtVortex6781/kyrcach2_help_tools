@@ -24,6 +24,7 @@ from .parsing import (
 from .validation import (
     SCRYPT_MIN_SALT_LEN,
     VALID_AES_KEY_LENGTHS,
+    UINT64_MAX,
     require_aesgcm_key_length,
     require_bytes,
     require_ed25519_private_key,
@@ -37,6 +38,8 @@ from .validation import (
     require_nonce_length,
     require_optional_instance,
     require_positive_int,
+    require_non_negative_int,
+    require_uint64,
     require_str,
     require_symmetric_key_bytes,
     require_x25519_private_key,
@@ -58,6 +61,8 @@ __all__ = [
     "require_non_empty_str",
     "require_int",
     "require_positive_int",
+    "require_non_negative_int",
+    "require_uint64",
     "require_exact_length_bytes",
     "require_min_length_bytes",
     "require_ed25519_private_key",
@@ -69,6 +74,7 @@ __all__ = [
     "require_aesgcm_key_length",
     "VALID_AES_KEY_LENGTHS",
     "SCRYPT_MIN_SALT_LEN",
+    "UINT64_MAX"
 ]
 
 __version__ = "0.36.0"

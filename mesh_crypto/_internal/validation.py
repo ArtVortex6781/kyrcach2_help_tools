@@ -22,6 +22,8 @@ __all__ = [
     "require_non_empty_str",
     "require_int",
     "require_positive_int",
+    "require_non_negative_int",
+    "require_uint64",
     "require_exact_length_bytes",
     "require_min_length_bytes",
     "require_ed25519_private_key",
@@ -32,11 +34,14 @@ __all__ = [
     "require_nonce_length",
     "require_aesgcm_key_length",
     "VALID_AES_KEY_LENGTHS",
-    "SCRYPT_MIN_SALT_LEN"
+    "SCRYPT_MIN_SALT_LEN",
+    "UINT64_MAX"
 ]
 
 VALID_AES_KEY_LENGTHS = {16, 24, 32}
 SCRYPT_MIN_SALT_LEN = 16
+
+UINT64_MAX = 2 ** 64 - 1
 
 
 # ==============================
@@ -167,6 +172,32 @@ def require_positive_int(value: object, *, field_name: str) -> None:
     require_int(value, field_name = field_name)
     if value <= 0:
         raise InvalidInputError(f"{field_name} must be a positive integer")
+
+
+def require_non_negative_int(value: object, *, field_name: str) -> None:
+    """
+    Validate that a value is a strict non-negative integer.
+
+    :param value: Value to validate.
+    :param field_name: Field name used in error messages.
+    :raises InvalidInputError: If the value is not a strict non-negative int.
+    """
+    require_int(value, field_name = field_name)
+    if value < 0:
+        raise InvalidInputError(f"{field_name} must be a non-negative integer")
+
+
+def require_uint64(value: object, *, field_name: str) -> None:
+    """
+    Validate that a value is a strict unsigned 64-bit integer.
+
+    :param value: Value to validate.
+    :param field_name: Field name used in error messages.
+    :raises InvalidInputError: If the value is not in uint64 range.
+    """
+    require_non_negative_int(value, field_name = field_name)
+    if value > UINT64_MAX:
+        raise InvalidInputError(f"{field_name} must be <= {UINT64_MAX}")
 
 
 def require_exact_length_bytes(value: object, *, field_name: str, length: int) -> None:
