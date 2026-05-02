@@ -20,6 +20,14 @@ __all__ = [
     "ProtectorSecretNotFoundError",
     "KeyNotFoundError",
     "KeystoreNotLoadedError",
+    "StorageCryptoError",
+    "SessionError",
+    "HandshakeError",
+    "InvalidSessionStateError",
+    "SessionCounterError",
+    "OutOfOrderMessageError",
+    "SkippedKeyLimitError",
+    "RatchetError",
 ]
 
 
@@ -173,4 +181,68 @@ class KeystoreNotLoadedError(KeystoreError):
     """
     Raised when a keystore operation requires loaded key material, but the
     keystore has not been initialized or opened yet.
+    """
+
+
+class StorageCryptoError(MeshCryptoError):
+    """
+    Base exception for storage field crypto failures.
+
+    This is used for storage-layer misuse or policy failures.
+    """
+
+
+class SessionError(MeshCryptoError):
+    """
+    Base exception for authenticated direct session/message crypto failures.
+    """
+
+
+class HandshakeError(SessionError):
+    """
+    Raised when authenticated direct session establishment fails.
+
+    This includes malformed handshake flow, unexpected peer identity,
+    transcript mismatch, or invalid role/state combinations during handshake.
+    """
+
+
+class InvalidSessionStateError(SessionError):
+    """
+    Raised when a direct session state is malformed, inconsistent, or unusable.
+
+    This includes invalid key lengths, invalid ratchet state, invalid role
+    combinations, or state that cannot safely be used for message operations.
+    """
+
+
+class SessionCounterError(SessionError):
+    """
+    Raised when direct session counters are invalid or cannot be advanced safely.
+
+    This includes invalid counter values, counter overflow, or impossible
+    counter transitions.
+    """
+
+
+class OutOfOrderMessageError(SessionCounterError):
+    """
+    Raised when a direct message is too far ahead of the current receive state
+    or cannot be handled by the supported out-of-order policy.
+    """
+
+
+class SkippedKeyLimitError(SessionCounterError):
+    """
+    Raised when deriving or storing skipped message keys would exceed the
+    configured skipped-key limit.
+    """
+
+
+class RatchetError(SessionError):
+    """
+    Raised when DH ratchet state or ratchet transitions are invalid.
+
+    This includes malformed ratchet public keys, inconsistent DH ratchet state,
+    or failed root/chain refresh logic.
     """
