@@ -10,7 +10,7 @@ from ..core.domain_separation import AAD_PURPOSE_STORAGE_FIELD
 from ..core.key_ids import KeyIdHelpers
 from ..core.key_types import KeyKind
 from ..core.types import KeyId
-from ..errors import InvalidInputError, InvalidKeyError, KeyNotFoundError, WrongKeyTypeError
+from ..errors import InvalidInputError, InvalidKeyError, KeyNotFoundError, WrongKeyTypeError, KeystoreNotLoadedError
 from ..keystore.file_keystore import FileKeyStore
 from ..primitives.aead import decrypt, encrypt
 from .envelopes import StorageFieldEnvelope
@@ -97,6 +97,20 @@ def _require_storage_aad(aad: bytes) -> None:
     require_non_empty_bytes(aad, field_name = "aad")
 
 
+def _require_initialized_keystore(keystore: FileKeyStore) -> None:
+    """
+    Validate that FileKeyStore is initialized and usable by storage crypto.
+
+    :param keystore: File keystore instance.
+    :raises InvalidInputError: If keystore has the wrong type.
+    :raises KeystoreNotLoadedError: If keystore master metadata does not exist.
+    """
+    require_instance(keystore, FileKeyStore, field_name = "keystore")
+
+    if not keystore.exists():
+        raise KeystoreNotLoadedError("keystore is not initialized or loaded")
+
+
 def _validate_storage_key(key: bytes) -> None:
     """
     Validate raw storage encryption key bytes.
@@ -133,7 +147,7 @@ def _load_storage_key_from_keystore(keystore: FileKeyStore, key_id: KeyId) -> by
     :raises WrongKeyTypeError: If the key is not symmetric.
     :raises InvalidKeyError: If key length is invalid.
     """
-    require_instance(keystore, FileKeyStore, field_name = "keystore")
+    _require_initialized_keystore(keystore)
 
     key_bytes, meta = keystore.get_key(key_id)
 
@@ -251,7 +265,7 @@ def encrypt_storage_field(keystore: FileKeyStore, plaintext: bytes, *,
     :raises WrongKeyTypeError: If selected key is not symmetric.
     :raises InvalidKeyError: If selected key material is invalid.
     """
-    require_instance(keystore, FileKeyStore, field_name = "keystore")
+    _require_initialized_keystore(keystore)
     require_bytes(plaintext, field_name = "plaintext")
     _require_storage_aad(aad)
 
@@ -294,7 +308,6 @@ def decrypt_storage_field(keystore: FileKeyStore, envelope: bytes,
     :raises UnsupportedFormatError: If envelope version/type/algorithm is unsupported.
     :raises AuthenticationError: If authenticated decryption fails.
     """
-    require_instance(keystore, FileKeyStore, field_name = "keystore")
     require_bytes(envelope, field_name = "envelope")
     _require_storage_aad(aad)
 
