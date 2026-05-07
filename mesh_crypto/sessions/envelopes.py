@@ -8,6 +8,7 @@ from .._internal import (
     b64_decode,
     b64_encode,
     require_bytes,
+    require_int,
     require_dict_field,
     require_exact_keys,
     require_exact_length_bytes,
@@ -133,7 +134,10 @@ class DirectMessageEnvelope:
         :raises MalformedDataError: If field types or shapes are invalid.
         :raises UnsupportedFormatError: If version, type, or algorithm is unsupported.
         """
-        require_instance(self.version, int, field_name = "version", error_cls = MalformedDataError)
+        try:
+            require_int(self.version, field_name = "version")
+        except InvalidInputError as exc:
+            raise MalformedDataError(str(exc)) from exc
         require_instance(self.type, str, field_name = "type", error_cls = MalformedDataError)
         require_instance(self.algorithm, str, field_name = "algorithm", error_cls = MalformedDataError)
         require_instance(self.aead, AeadEnvelope, field_name = "aead", error_cls = MalformedDataError)

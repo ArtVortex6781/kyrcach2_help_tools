@@ -10,7 +10,8 @@ from .._internal import (
     require_instance,
     require_int_field,
     require_str_field,
-    require_exact_keys
+    require_exact_keys,
+    require_int
 )
 from ..core.key_ids import KeyIdHelpers
 from ..core.types import KeyId
@@ -102,7 +103,10 @@ class StorageFieldEnvelope:
         :raises MalformedDataError: If field types are invalid.
         :raises UnsupportedFormatError: If version, type, or algorithm is unsupported.
         """
-        require_instance(self.version, int, field_name = "version", error_cls = MalformedDataError)
+        try:
+            require_int(self.version, field_name = "version")
+        except InvalidInputError as exc:
+            raise MalformedDataError(str(exc)) from exc
         require_instance(self.type, str, field_name = "type", error_cls = MalformedDataError)
         require_instance(self.algorithm, str, field_name = "algorithm", error_cls = MalformedDataError)
         require_instance(self.aead, AeadEnvelope, field_name = "aead", error_cls = MalformedDataError)

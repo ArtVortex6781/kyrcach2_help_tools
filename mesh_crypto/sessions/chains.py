@@ -139,8 +139,6 @@ def advance_chain(chain_key: bytes, counter: int) -> tuple[bytes, bytes, int]:
     :raises SessionCounterError: If counter is invalid or would overflow.
     :raises InvalidKeyError: If HKDF derivation fails.
     """
-    _require_chain_key(chain_key)
-    _require_chain_counter(counter)
 
     if counter == UINT64_MAX:
         raise SessionCounterError("chain counter overflow")
