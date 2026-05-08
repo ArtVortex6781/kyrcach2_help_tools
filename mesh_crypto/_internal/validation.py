@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Type
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -9,9 +11,12 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 
-from typing import Type
-
-from ..errors import InvalidInputError, WrongKeyTypeError, InvalidKeyError, MeshCryptoError
+from ..errors import (
+    InvalidInputError,
+    InvalidKeyError,
+    MeshCryptoError,
+    WrongKeyTypeError,
+)
 
 __all__ = [
     "require_instance",
@@ -35,7 +40,7 @@ __all__ = [
     "require_aesgcm_key_length",
     "VALID_AES_KEY_LENGTHS",
     "SCRYPT_MIN_SALT_LEN",
-    "UINT64_MAX"
+    "UINT64_MAX",
 ]
 
 VALID_AES_KEY_LENGTHS = {16, 24, 32}
@@ -69,7 +74,7 @@ def require_instance(value: object, expected_type: type | tuple[type, ...],
     :param expected_type: Expected type or tuple of types.
     :param field_name: Field name used in error messages.
     :param error_cls: Exception class to raise on failure.
-    :raises InvalidInputError: By default, if the value has the wrong type.
+    :raises MeshCryptoError: If the value has the wrong type.
     """
     if not isinstance(value, expected_type):
         raise error_cls(f"{field_name} must be {_type_name(expected_type)}")
@@ -84,7 +89,7 @@ def require_optional_instance(value: object, expected_type: type | tuple[type, .
     :param expected_type: Expected type or tuple of types.
     :param field_name: Field name used in error messages.
     :param error_cls: Exception class to raise on failure.
-    :raises InvalidInputError: By default, if the value is neither None nor expected type.
+    :raises MeshCryptoError: If the value is neither None nor expected type.
     """
     if value is not None:
         require_instance(
@@ -99,55 +104,64 @@ def require_optional_instance(value: object, expected_type: type | tuple[type, .
 # Common value validators
 # ==============================
 
-def require_bytes(value: object, *, field_name: str) -> None:
+def require_bytes(value: object, *, field_name: str,
+                  error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is bytes.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not bytes.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not bytes.
     """
-    require_instance(value, bytes, field_name = field_name)
+    require_instance(value, bytes, field_name = field_name, error_cls = error_cls)
 
 
-def require_non_empty_bytes(value: object, *, field_name: str) -> None:
+def require_non_empty_bytes(value: object, *, field_name: str,
+                            error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is non-empty bytes.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not bytes or is empty.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not bytes or is empty.
     """
-    require_bytes(value, field_name = field_name)
+    require_bytes(value, field_name = field_name, error_cls = error_cls)
     if value == b"":
-        raise InvalidInputError(f"{field_name} must not be empty")
+        raise error_cls(f"{field_name} must not be empty")
 
 
-def require_str(value: object, *, field_name: str) -> None:
+def require_str(value: object, *, field_name: str,
+                error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is str.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not str.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not str.
     """
-    require_instance(value, str, field_name = field_name)
+    require_instance(value, str, field_name = field_name, error_cls = error_cls)
 
 
-def require_non_empty_str(value: object, *, field_name: str) -> None:
+def require_non_empty_str(value: object, *, field_name: str,
+                          error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is non-empty str.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not str or is empty.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not str or is empty.
     """
-    require_str(value, field_name = field_name)
+    require_str(value, field_name = field_name, error_cls = error_cls)
     if value == "":
-        raise InvalidInputError(f"{field_name} must not be empty")
+        raise error_cls(f"{field_name} must not be empty")
 
 
-def require_int(value: object, *, field_name: str) -> None:
+def require_int(value: object, *, field_name: str,
+                error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is a strict int.
 
@@ -155,176 +169,209 @@ def require_int(value: object, *, field_name: str) -> None:
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not a strict int.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not a strict int.
     """
     if type(value) is not int:
-        raise InvalidInputError(f"{field_name} must be int")
+        raise error_cls(f"{field_name} must be int")
 
 
-def require_positive_int(value: object, *, field_name: str) -> None:
+def require_positive_int(value: object, *, field_name: str,
+                         error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is a strict positive int.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not a strict positive int.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not a strict positive int.
     """
-    require_int(value, field_name = field_name)
+    require_int(value, field_name = field_name, error_cls = error_cls)
     if value <= 0:
-        raise InvalidInputError(f"{field_name} must be a positive integer")
+        raise error_cls(f"{field_name} must be a positive integer")
 
 
-def require_non_negative_int(value: object, *, field_name: str) -> None:
+def require_non_negative_int(value: object, *, field_name: str,
+                             error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is a strict non-negative integer.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not a strict non-negative int.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not a strict non-negative int.
     """
-    require_int(value, field_name = field_name)
+    require_int(value, field_name = field_name, error_cls = error_cls)
     if value < 0:
-        raise InvalidInputError(f"{field_name} must be a non-negative integer")
+        raise error_cls(f"{field_name} must be a non-negative integer")
 
 
-def require_uint64(value: object, *, field_name: str) -> None:
+def require_uint64(value: object, *, field_name: str,
+                   error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is a strict unsigned 64-bit integer.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the value is not in uint64 range.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not in uint64 range.
     """
-    require_non_negative_int(value, field_name = field_name)
+    require_non_negative_int(value, field_name = field_name, error_cls = error_cls)
     if value > UINT64_MAX:
-        raise InvalidInputError(f"{field_name} must be <= {UINT64_MAX}")
+        raise error_cls(f"{field_name} must be <= {UINT64_MAX}")
 
 
-def require_exact_length_bytes(value: object, *, field_name: str, length: int) -> None:
+def require_exact_length_bytes(value: object, *, field_name: str,
+                               length: int, error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is bytes of exact length.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
     :param length: Expected exact length in bytes.
-    :raises InvalidInputError: If the value is not bytes or length does not match.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not bytes or length does not match.
     """
-    require_bytes(value, field_name = field_name)
+    require_bytes(value, field_name = field_name, error_cls = error_cls)
+    require_positive_int(length, field_name = "length", error_cls = error_cls)
+
     if len(value) != length:
-        raise InvalidInputError(f"{field_name} must be exactly {length} bytes")
+        raise error_cls(f"{field_name} must be exactly {length} bytes")
 
 
-def require_min_length_bytes(value: object, *, field_name: str, min_length: int) -> None:
+def require_min_length_bytes(value: object, *, field_name: str, min_length: int,
+                             error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is bytes with at least the specified length.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
     :param min_length: Minimum allowed length in bytes.
-    :raises InvalidInputError: If the value is not bytes or is too short.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not bytes or is too short.
     """
-    require_bytes(value, field_name = field_name)
-    require_positive_int(min_length, field_name = "min_length")
+    require_bytes(value, field_name = field_name, error_cls = error_cls)
+    require_positive_int(min_length, field_name = "min_length", error_cls = error_cls)
 
     if len(value) < min_length:
-        raise InvalidInputError(f"{field_name} must be at least {min_length} bytes")
+        raise error_cls(f"{field_name} must be at least {min_length} bytes")
 
 
 # ==============================
 # Crypto-specific validators
 # ==============================
 
-def require_ed25519_private_key(value: object, *, field_name: str) -> None:
+def require_ed25519_private_key(value: object, *, field_name: str,
+                                error_cls: Type[MeshCryptoError] = WrongKeyTypeError) -> None:
     """
     Validate that a value is Ed25519PrivateKey.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises WrongKeyTypeError: If the value is not Ed25519PrivateKey.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not Ed25519PrivateKey.
     """
     require_instance(
         value,
         Ed25519PrivateKey,
         field_name = field_name,
-        error_cls = WrongKeyTypeError,
+        error_cls = error_cls,
     )
 
 
-def require_ed25519_public_key(value: object, *, field_name: str) -> None:
+def require_ed25519_public_key(value: object, *, field_name: str,
+                               error_cls: Type[MeshCryptoError] = WrongKeyTypeError) -> None:
     """
     Validate that a value is Ed25519PublicKey.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises WrongKeyTypeError: If the value is not Ed25519PublicKey.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not Ed25519PublicKey.
     """
     require_instance(
         value,
         Ed25519PublicKey,
         field_name = field_name,
-        error_cls = WrongKeyTypeError,
+        error_cls = error_cls,
     )
 
 
-def require_x25519_private_key(value: object, *, field_name: str) -> None:
+def require_x25519_private_key(value: object, *, field_name: str,
+                               error_cls: Type[MeshCryptoError] = WrongKeyTypeError) -> None:
     """
     Validate that a value is X25519PrivateKey.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises WrongKeyTypeError: If the value is not X25519PrivateKey.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not X25519PrivateKey.
     """
     require_instance(
         value,
         X25519PrivateKey,
         field_name = field_name,
-        error_cls = WrongKeyTypeError,
+        error_cls = error_cls,
     )
 
 
-def require_x25519_public_key(value: object, *, field_name: str) -> None:
+def require_x25519_public_key(value: object, *, field_name: str,
+                              error_cls: Type[MeshCryptoError] = WrongKeyTypeError) -> None:
     """
     Validate that a value is X25519PublicKey.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
-    :raises WrongKeyTypeError: If the value is not X25519PublicKey.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not X25519PublicKey.
     """
     require_instance(
         value,
         X25519PublicKey,
         field_name = field_name,
-        error_cls = WrongKeyTypeError,
+        error_cls = error_cls,
     )
 
 
-def require_symmetric_key_bytes(value: object, *, field_name: str, min_length: int = 1) -> None:
+def require_symmetric_key_bytes(value: object, *, field_name: str, min_length: int = 1,
+                                error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate that a value is bytes suitable for symmetric key material.
 
     :param value: Value to validate.
     :param field_name: Field name used in error messages.
     :param min_length: Minimum acceptable key length in bytes.
-    :raises InvalidInputError: If the value is not bytes or is too short.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the value is not bytes or is too short.
     """
-    require_bytes(value, field_name = field_name)
+    require_bytes(value, field_name = field_name, error_cls = error_cls)
+    require_positive_int(min_length, field_name = "min_length", error_cls = error_cls)
+
     if len(value) < min_length:
-        raise InvalidInputError(f"{field_name} must be at least {min_length} bytes")
+        raise error_cls(f"{field_name} must be at least {min_length} bytes")
 
 
-def require_nonce_length(value: object, *, field_name: str = "nonce", length: int = 12) -> None:
+def require_nonce_length(value: object, *, field_name: str = "nonce", length: int = 12,
+                         error_cls: Type[MeshCryptoError] = InvalidInputError) -> None:
     """
     Validate nonce bytes of exact length.
 
     :param value: Nonce value to validate.
     :param field_name: Field name used in error messages.
     :param length: Required nonce length in bytes.
-    :raises InvalidInputError: If the nonce is not bytes or has invalid length.
+    :param error_cls: Exception class to raise on failure.
+    :raises MeshCryptoError: If the nonce is not bytes or has invalid length.
     """
-    require_exact_length_bytes(value, field_name = field_name, length = length)
+    require_exact_length_bytes(
+        value,
+        field_name = field_name,
+        length = length,
+        error_cls = error_cls,
+    )
 
 
-def require_aesgcm_key_length(value: object, *, field_name: str = "key") -> None:
+def require_aesgcm_key_length(value: object, *, field_name: str = "key",
+                              error_cls: Type[MeshCryptoError] = InvalidKeyError) -> None:
     """
     Validate AES-GCM key bytes length.
 
@@ -332,8 +379,10 @@ def require_aesgcm_key_length(value: object, *, field_name: str = "key") -> None
 
     :param value: Key value to validate.
     :param field_name: Field name used in error messages.
-    :raises InvalidInputError: If the key is not bytes or has invalid length.
+    :param error_cls: Exception class to raise on invalid AES-GCM key length.
+    :raises MeshCryptoError: If the key is not bytes or has invalid length.
     """
-    require_bytes(value, field_name = field_name)
+    require_bytes(value, field_name = field_name, error_cls = InvalidInputError)
+
     if len(value) not in VALID_AES_KEY_LENGTHS:
-        raise InvalidKeyError(f"{field_name} must be 16, 24, or 32 bytes")
+        raise error_cls(f"{field_name} must be 16, 24, or 32 bytes")
