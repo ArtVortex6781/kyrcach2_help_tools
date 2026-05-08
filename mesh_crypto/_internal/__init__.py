@@ -48,6 +48,7 @@ from .validation import (
     require_x25519_private_key,
     require_x25519_public_key,
 )
+from .error_mapping import remap_crypto_error
 
 __all__ = [
     "b64_encode",
@@ -80,7 +81,8 @@ __all__ = [
     "require_aesgcm_key_length",
     "VALID_AES_KEY_LENGTHS",
     "SCRYPT_MIN_SALT_LEN",
-    "UINT64_MAX"
+    "UINT64_MAX",
+    "remap_crypto_error"
 ]
 
-__version__ = "0.36.0"
+__version__ = "0.38.0"
