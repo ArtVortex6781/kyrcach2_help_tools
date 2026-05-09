@@ -7,19 +7,23 @@ from typing import Any
 from .._internal import (
     b64_decode,
     b64_encode,
-    require_bytes,
-    require_int,
+    remap_crypto_error,
     require_dict_field,
     require_exact_keys,
     require_exact_length_bytes,
     require_instance,
+    require_int,
     require_int_field,
+    require_str,
     require_str_field,
+    require_supported_algorithm,
+    require_supported_type,
+    require_supported_version,
     require_uint64,
 )
 from ..core.key_ids import KeyIdHelpers
 from ..core.types import KeyId
-from ..errors import InvalidInputError, MalformedDataError, UnsupportedFormatError
+from ..errors import InvalidInputError, MalformedDataError
 from ..primitives.envelopes import AeadEnvelope
 
 __all__ = ["DirectMessageEnvelope"]
@@ -41,72 +45,6 @@ _DIRECT_MESSAGE_KEYS = {
 }
 
 
-def _validate_version(version: int) -> None:
-    """
-    Validate direct message envelope version.
-
-    :param version: Envelope version.
-    :raises UnsupportedFormatError: If the version is unsupported.
-    """
-    if version != _DIRECT_MESSAGE_VERSION:
-        raise UnsupportedFormatError(f"unsupported direct message envelope version: {version}")
-
-
-def _validate_type(value: str) -> None:
-    """
-    Validate direct message envelope type.
-
-    :param value: Envelope type.
-    :raises UnsupportedFormatError: If the type is unsupported.
-    """
-    if value != _DIRECT_MESSAGE_TYPE:
-        raise UnsupportedFormatError(f"unsupported direct message envelope type: {value}")
-
-
-def _validate_algorithm(algorithm: str) -> None:
-    """
-    Validate direct message envelope algorithm.
-
-    :param algorithm: Envelope algorithm.
-    :raises UnsupportedFormatError: If the algorithm is unsupported.
-    """
-    if algorithm != _DIRECT_MESSAGE_ALGORITHM:
-        raise UnsupportedFormatError(f"unsupported direct message algorithm: {algorithm}")
-
-
-def _normalize_session_id(value: KeyId | str | bytes) -> KeyId:
-    """
-    Normalize direct session identifier.
-
-    :param value: Session identifier.
-    :return: Normalized UUID session identifier.
-    :raises MalformedDataError: If the session identifier is malformed.
-    """
-    try:
-        return KeyIdHelpers.normalize_key_id(value)
-    except InvalidInputError as exc:
-        raise MalformedDataError("invalid direct message session_id") from exc
-
-
-def _validate_ratchet_public_key(value: object) -> None:
-    """
-    Validate raw X25519 ratchet public key bytes.
-
-    :param value: Ratchet public key bytes.
-    :raises MalformedDataError: If the value is not a 32-byte public key blob.
-    """
-    try:
-        require_exact_length_bytes(
-            value,
-            field_name = "ratchet_pub",
-            length = _RATCHET_PUBLIC_KEY_LENGTH,
-        )
-    except InvalidInputError as exc:
-        raise MalformedDataError(
-            f"ratchet_pub must be exactly {_RATCHET_PUBLIC_KEY_LENGTH} bytes"
-        ) from exc
-
-
 @dataclass(frozen = True)
 class DirectMessageEnvelope:
     """
@@ -114,8 +52,7 @@ class DirectMessageEnvelope:
 
     This envelope stores direct-message protocol metadata and wraps the
     primitive AEAD envelope containing nonce and ciphertext. The metadata is
-    validated here and must later be bound into AEAD AAD by message encryption
-    and decryption logic.
+    later bound into AEAD AAD by message encryption/decryption logic.
     """
 
     version: int
@@ -134,28 +71,41 @@ class DirectMessageEnvelope:
         :raises MalformedDataError: If field types or shapes are invalid.
         :raises UnsupportedFormatError: If version, type, or algorithm is unsupported.
         """
-        try:
-            require_int(self.version, field_name = "version")
-        except InvalidInputError as exc:
-            raise MalformedDataError(str(exc)) from exc
-        require_instance(self.type, str, field_name = "type", error_cls = MalformedDataError)
-        require_instance(self.algorithm, str, field_name = "algorithm", error_cls = MalformedDataError)
-        require_instance(self.aead, AeadEnvelope, field_name = "aead", error_cls = MalformedDataError)
+        require_int(self.version, field_name = "version", error_cls = MalformedDataError)
+        require_str(self.type, field_name = "type", error_cls = MalformedDataError)
+        require_str(self.algorithm, field_name = "algorithm", error_cls = MalformedDataError)
+        require_uint64(self.counter, field_name = "counter", error_cls = MalformedDataError)
+        require_uint64(
+            self.previous_chain_length,
+            field_name = "previous_chain_length",
+            error_cls = MalformedDataError,
+        )
+        require_exact_length_bytes(
+            self.ratchet_pub,
+            field_name = "ratchet_pub",
+            length = _RATCHET_PUBLIC_KEY_LENGTH,
+            error_cls = MalformedDataError,
+        )
+        require_instance(
+            self.aead,
+            AeadEnvelope,
+            field_name = "aead",
+            error_cls = MalformedDataError,
+        )
 
-        _validate_version(self.version)
-        _validate_type(self.type)
-        _validate_algorithm(self.algorithm)
+        require_supported_version(self.version, _DIRECT_MESSAGE_VERSION)
+        require_supported_type(self.type, _DIRECT_MESSAGE_TYPE)
+        require_supported_algorithm(self.algorithm, _DIRECT_MESSAGE_ALGORITHM)
 
-        normalized_session_id = _normalize_session_id(self.session_id)
-        object.__setattr__(self, "session_id", normalized_session_id)
-
-        try:
-            require_uint64(self.counter, field_name = "counter")
-            require_uint64(self.previous_chain_length, field_name = "previous_chain_length")
-        except InvalidInputError as exc:
-            raise MalformedDataError(str(exc)) from exc
-
-        _validate_ratchet_public_key(self.ratchet_pub)
+        object.__setattr__(
+            self,
+            "session_id",
+            remap_crypto_error(
+                lambda: KeyIdHelpers.normalize_key_id(self.session_id),
+                error_cls = MalformedDataError,
+                message = "invalid direct message session_id",
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -180,13 +130,13 @@ class DirectMessageEnvelope:
         Parse a direct message envelope from a dictionary.
 
         The parser is fail-closed:
-        - input must be a dict
-        - keys must match exactly
-        - version/type/algorithm must be supported
-        - session_id must be a valid UUID
-        - counters must be uint64
-        - ratchet_pub must be valid base64 and decode to 32 bytes
-        - nested AEAD envelope must be valid
+        - input must be a dict;
+        - keys must match exactly;
+        - version/type/algorithm must be supported;
+        - session_id must be a valid UUID;
+        - counters must be uint64;
+        - ratchet_pub must be valid base64 and decode to 32 bytes;
+        - nested AEAD envelope must be valid.
 
         :param data: Dictionary representation.
         :return: Parsed DirectMessageEnvelope.
@@ -212,7 +162,11 @@ class DirectMessageEnvelope:
         return DirectMessageEnvelope(
             version = version,
             type = envelope_type,
-            session_id = _normalize_session_id(session_id_raw),
+            session_id = remap_crypto_error(
+                lambda: KeyIdHelpers.normalize_key_id(session_id_raw),
+                error_cls = MalformedDataError,
+                message = "invalid direct message session_id",
+            ),
             counter = counter,
             previous_chain_length = previous_chain_length,
             algorithm = algorithm,
@@ -243,7 +197,7 @@ class DirectMessageEnvelope:
         :raises MalformedDataError: If bytes are not valid envelope JSON.
         :raises UnsupportedFormatError: If version, type, or algorithm is unsupported.
         """
-        require_bytes(data, field_name = "data")
+        require_instance(data, bytes, field_name = "data", error_cls = InvalidInputError)
 
         try:
             raw = json.loads(data.decode("utf-8"))
@@ -252,6 +206,11 @@ class DirectMessageEnvelope:
         except json.JSONDecodeError as exc:
             raise MalformedDataError("direct message envelope contains invalid JSON") from exc
 
-        require_instance(raw, dict, field_name = "direct_message_envelope", error_cls = MalformedDataError)
+        require_instance(
+            raw,
+            dict,
+            field_name = "direct_message_envelope",
+            error_cls = MalformedDataError,
+        )
 
         return DirectMessageEnvelope.from_dict(raw)
