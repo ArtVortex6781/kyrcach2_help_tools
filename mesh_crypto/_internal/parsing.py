@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Type
 
-from ..errors import MalformedDataError, MeshCryptoError
+from ..errors import MalformedDataError, MeshCryptoError, UnsupportedFormatError
 from .validation import require_instance
 
 __all__ = [
@@ -12,7 +12,10 @@ __all__ = [
     "require_dict_field",
     "require_required_keys",
     "require_allowed_keys",
-    "require_exact_keys"
+    "require_exact_keys",
+    "require_supported_version",
+    "require_supported_type",
+    "require_supported_algorithm",
 ]
 
 
@@ -113,3 +116,96 @@ def require_exact_keys(data: dict[str, Any], expected_keys: set[str], *, schema_
         schema_name = schema_name,
         error_cls = error_cls,
     )
+
+
+def _allowed_int_values(allowed: int | set[int] | frozenset[int]) -> set[int] | frozenset[int]:
+    """
+    Normalize allowed integer values.
+
+    :param allowed: Single allowed integer or set/frozenset of integers.
+    :return: Allowed integer values.
+    """
+    if type(allowed) is int:
+        return {allowed}
+    return allowed
+
+
+def _allowed_str_values(allowed: str | set[str] | frozenset[str]) -> set[str] | frozenset[str]:
+    """
+    Normalize allowed string values.
+
+    :param allowed: Single allowed string or set/frozenset of strings.
+    :return: Allowed string values.
+    """
+    if isinstance(allowed, str):
+        return {allowed}
+    return allowed
+
+
+def require_supported_version(value: int, allowed: int | set[int] | frozenset[int], *,
+                              field_name: str = "version",
+                              error_cls: Type[MeshCryptoError] = UnsupportedFormatError) -> None:
+    """
+    Validate that a parsed version value is supported.
+
+    Type validation should be performed before this helper, for example through
+    require_int_field() or require_int().
+
+    :param value: Parsed version value.
+    :param allowed: Supported version or set/frozenset of supported versions.
+    :param field_name: Field name used in error messages.
+    :param error_cls: Exception class to raise on failure.
+    :raises UnsupportedFormatError: By default, if version is unsupported.
+    """
+    allowed_values = _allowed_int_values(allowed)
+
+    if value not in allowed_values:
+        raise error_cls(
+            f"unsupported {field_name}: {value}; expected one of {sorted(allowed_values)}"
+        )
+
+
+def require_supported_type(value: str, allowed: str | set[str] | frozenset[str], *,
+                           field_name: str = "type",
+                           error_cls: Type[MeshCryptoError] = UnsupportedFormatError) -> None:
+    """
+    Validate that a parsed envelope/message type is supported.
+
+    Type validation should be performed before this helper, for example through
+    require_str_field() or require_str().
+
+    :param value: Parsed type value.
+    :param allowed: Supported type or set/frozenset of supported types.
+    :param field_name: Field name used in error messages.
+    :param error_cls: Exception class to raise on failure.
+    :raises UnsupportedFormatError: By default, if type is unsupported.
+    """
+    allowed_values = _allowed_str_values(allowed)
+
+    if value not in allowed_values:
+        raise error_cls(
+            f"unsupported {field_name}: {value}; expected one of {sorted(allowed_values)}"
+        )
+
+
+def require_supported_algorithm(value: str, allowed: str | set[str] | frozenset[str], *,
+                                field_name: str = "algorithm",
+                                error_cls: Type[MeshCryptoError] = UnsupportedFormatError) -> None:
+    """
+    Validate that a parsed algorithm identifier is supported.
+
+    Type validation should be performed before this helper, for example through
+    require_str_field() or require_str().
+
+    :param value: Parsed algorithm value.
+    :param allowed: Supported algorithm or set/frozenset of supported algorithms.
+    :param field_name: Field name used in error messages.
+    :param error_cls: Exception class to raise on failure.
+    :raises UnsupportedFormatError: By default, if algorithm is unsupported.
+    """
+    allowed_values = _allowed_str_values(allowed)
+
+    if value not in allowed_values:
+        raise error_cls(
+            f"unsupported {field_name}: {value}; expected one of {sorted(allowed_values)}"
+        )

@@ -22,7 +22,10 @@ from .parsing import (
     require_str_field,
     require_required_keys,
     require_allowed_keys,
-    require_exact_keys
+    require_exact_keys,
+    require_supported_version,
+    require_supported_type,
+    require_supported_algorithm
 )
 from .validation import (
     SCRYPT_MIN_SALT_LEN,
@@ -67,6 +70,9 @@ __all__ = [
     "require_exact_keys",
     "require_allowed_keys",
     "require_required_keys",
+    "require_supported_version",
+    "require_supported_type",
+    "require_supported_algorithm",
     "require_instance",
     "require_optional_instance",
     "require_bytes",
@@ -97,4 +103,4 @@ __all__ = [
     "frame_uint64",
 ]
 
-__version__ = "0.38.0"
+__version__ = "0.39.0"
