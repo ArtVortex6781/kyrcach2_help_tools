@@ -5,17 +5,21 @@ from dataclasses import dataclass
 from typing import Any
 
 from .._internal import (
-    require_bytes,
+    remap_crypto_error,
     require_dict_field,
-    require_instance,
-    require_int_field,
-    require_str_field,
     require_exact_keys,
-    require_int
+    require_instance,
+    require_int,
+    require_int_field,
+    require_str,
+    require_str_field,
+    require_supported_algorithm,
+    require_supported_type,
+    require_supported_version,
 )
 from ..core.key_ids import KeyIdHelpers
 from ..core.types import KeyId
-from ..errors import InvalidInputError, MalformedDataError, UnsupportedFormatError
+from ..errors import InvalidInputError, MalformedDataError
 from ..primitives.envelopes import AeadEnvelope
 
 __all__ = ["StorageFieldEnvelope"]
@@ -33,61 +37,14 @@ _STORAGE_FIELD_KEYS = {
 }
 
 
-def _validate_version(version: int) -> None:
-    """
-    Validate storage field envelope version.
-
-    :param version: Envelope version.
-    :raises UnsupportedFormatError: If the version is unsupported.
-    """
-    if version != _STORAGE_FIELD_VERSION:
-        raise UnsupportedFormatError(f"unsupported storage field envelope version: {version}")
-
-
-def _validate_type(value: str) -> None:
-    """
-    Validate storage field envelope type.
-
-    :param value: Envelope type.
-    :raises UnsupportedFormatError: If the type is unsupported.
-    """
-    if value != _STORAGE_FIELD_TYPE:
-        raise UnsupportedFormatError(f"unsupported storage field envelope type: {value}")
-
-
-def _validate_algorithm(algorithm: str) -> None:
-    """
-    Validate storage field envelope algorithm.
-
-    :param algorithm: Envelope algorithm.
-    :raises UnsupportedFormatError: If the algorithm is unsupported.
-    """
-    if algorithm != _STORAGE_FIELD_ALGORITHM:
-        raise UnsupportedFormatError(f"unsupported storage field algorithm: {algorithm}")
-
-
-def _normalize_envelope_key_id(value: KeyId | str | bytes) -> KeyId:
-    """
-    Normalize a storage envelope key identifier.
-
-    :param value: Key identifier value.
-    :return: Normalized KeyId.
-    :raises MalformedDataError: If the key identifier is malformed.
-    """
-    try:
-        return KeyIdHelpers.normalize_key_id(value)
-    except InvalidInputError as exc:
-        raise MalformedDataError("invalid storage field key_id") from exc
-
-
 @dataclass(frozen = True)
 class StorageFieldEnvelope:
     """
-    Versioned envelope for encrypted storage fields.
+    Versioned envelope for encrypted-at-rest storage fields.
 
-    This envelope is a storage-layer wrapper around the primitive AEAD envelope.
-    It binds encrypted field blobs to a storage-specific format and records the
-    key identifier required for keystore-backed decryption.
+    The envelope binds a storage ciphertext to the key identifier used for
+    encryption and wraps the primitive AEAD envelope containing nonce and
+    ciphertext bytes.
     """
 
     version: int
@@ -100,23 +57,27 @@ class StorageFieldEnvelope:
         """
         Validate storage field envelope invariants.
 
-        :raises MalformedDataError: If field types are invalid.
+        :raises MalformedDataError: If field types or shapes are invalid.
         :raises UnsupportedFormatError: If version, type, or algorithm is unsupported.
         """
-        try:
-            require_int(self.version, field_name = "version")
-        except InvalidInputError as exc:
-            raise MalformedDataError(str(exc)) from exc
-        require_instance(self.type, str, field_name = "type", error_cls = MalformedDataError)
-        require_instance(self.algorithm, str, field_name = "algorithm", error_cls = MalformedDataError)
+        require_int(self.version, field_name = "version", error_cls = MalformedDataError)
+        require_str(self.type, field_name = "type", error_cls = MalformedDataError)
+        require_str(self.algorithm, field_name = "algorithm", error_cls = MalformedDataError)
         require_instance(self.aead, AeadEnvelope, field_name = "aead", error_cls = MalformedDataError)
 
-        _validate_version(self.version)
-        _validate_type(self.type)
-        _validate_algorithm(self.algorithm)
+        require_supported_version(self.version, _STORAGE_FIELD_VERSION)
+        require_supported_type(self.type, _STORAGE_FIELD_TYPE)
+        require_supported_algorithm(self.algorithm, _STORAGE_FIELD_ALGORITHM)
 
-        normalized_key_id = _normalize_envelope_key_id(self.key_id)
-        object.__setattr__(self, "key_id", normalized_key_id)
+        object.__setattr__(
+            self,
+            "key_id",
+            remap_crypto_error(
+                lambda: KeyIdHelpers.normalize_key_id(self.key_id),
+                error_cls = MalformedDataError,
+                message = "invalid storage field key_id",
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -138,11 +99,11 @@ class StorageFieldEnvelope:
         Parse a storage field envelope from a dictionary.
 
         The parser is fail-closed:
-        - input must be a dict
-        - keys must match exactly
-        - version/type/algorithm must be supported
-        - key_id must be a valid key identifier
-        - nested AEAD envelope must be valid
+        - input must be a dict;
+        - keys must match exactly;
+        - version/type/algorithm must be supported;
+        - key_id must be a valid UUID;
+        - nested AEAD envelope must be valid.
 
         :param data: Dictionary representation.
         :return: Parsed StorageFieldEnvelope.
@@ -150,7 +111,11 @@ class StorageFieldEnvelope:
         :raises UnsupportedFormatError: If version, type, or algorithm is unsupported.
         """
         require_instance(data, dict, field_name = "data", error_cls = MalformedDataError)
-        require_exact_keys(data, _STORAGE_FIELD_KEYS, schema_name = "storage field envelope")
+        require_exact_keys(
+            data,
+            _STORAGE_FIELD_KEYS,
+            schema_name = "storage field envelope",
+        )
 
         version = require_int_field(data, "version")
         envelope_type = require_str_field(data, "type")
@@ -162,7 +127,11 @@ class StorageFieldEnvelope:
             version = version,
             type = envelope_type,
             algorithm = algorithm,
-            key_id = _normalize_envelope_key_id(key_id_raw),
+            key_id = remap_crypto_error(
+                lambda: KeyIdHelpers.normalize_key_id(key_id_raw),
+                error_cls = MalformedDataError,
+                message = "invalid storage field key_id",
+            ),
             aead = AeadEnvelope.from_dict(aead_raw),
         )
 
@@ -189,7 +158,7 @@ class StorageFieldEnvelope:
         :raises MalformedDataError: If bytes are not valid envelope JSON.
         :raises UnsupportedFormatError: If version, type, or algorithm is unsupported.
         """
-        require_bytes(data, field_name = "data")
+        require_instance(data, bytes, field_name = "data", error_cls = InvalidInputError)
 
         try:
             raw = json.loads(data.decode("utf-8"))
@@ -198,6 +167,11 @@ class StorageFieldEnvelope:
         except json.JSONDecodeError as exc:
             raise MalformedDataError("storage field envelope contains invalid JSON") from exc
 
-        require_instance(raw, dict, field_name = "storage_field_envelope", error_cls = MalformedDataError)
+        require_instance(
+            raw,
+            dict,
+            field_name = "storage_field_envelope",
+            error_cls = MalformedDataError,
+        )
 
         return StorageFieldEnvelope.from_dict(raw)
