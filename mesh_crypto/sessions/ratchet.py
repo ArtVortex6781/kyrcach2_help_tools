@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from .._internal import (
+    frame_labeled_bytes,
+    remap_crypto_error,
+)
 from ..core.domain_separation import (
     HKDF_INFO_DIRECT_CHAIN_I2R,
     HKDF_INFO_DIRECT_CHAIN_R2I,
@@ -36,27 +40,6 @@ _CHAIN_KEY_LENGTH = 32
 _RATCHET_CHAIN_INFO_CONTEXT = b"mesh_crypto:direct_ratchet_chain_info:v1"
 
 
-def _frame_bytes(value: bytes) -> bytes:
-    """
-    Encode bytes as a length-prefixed frame.
-
-    :param value: Bytes to frame.
-    :return: 4-byte big-endian length followed by value.
-    """
-    return len(value).to_bytes(4, "big") + value
-
-
-def _frame_labeled_bytes(label: bytes, value: bytes) -> bytes:
-    """
-    Encode a labeled byte field as length-prefixed label and value.
-
-    :param label: Field label.
-    :param value: Field value.
-    :return: Canonically framed labeled field.
-    """
-    return _frame_bytes(label) + _frame_bytes(value)
-
-
 def _build_ratchet_chain_info(direction_label: bytes) -> bytes:
     """
     Build canonical HKDF info for DH ratchet chain derivation.
@@ -65,24 +48,10 @@ def _build_ratchet_chain_info(direction_label: bytes) -> bytes:
     :return: Framed HKDF info.
     """
     return (
-            _frame_labeled_bytes(b"context", _RATCHET_CHAIN_INFO_CONTEXT)
-            + _frame_labeled_bytes(b"purpose", HKDF_INFO_DIRECT_RATCHET_CHAIN)
-            + _frame_labeled_bytes(b"direction", direction_label)
+            frame_labeled_bytes(b"context", _RATCHET_CHAIN_INFO_CONTEXT)
+            + frame_labeled_bytes(b"purpose", HKDF_INFO_DIRECT_RATCHET_CHAIN)
+            + frame_labeled_bytes(b"direction", direction_label)
     )
-
-
-def _x25519_public_key_from_bytes(ratchet_pub: bytes) -> "X25519PublicKey":
-    """
-    Parse raw X25519 public key bytes.
-
-    :param ratchet_pub: Raw X25519 public key bytes.
-    :return: X25519 public key object.
-    :raises RatchetError: If public key import fails.
-    """
-    try:
-        return EncryptionKeySerializer.import_public_key_raw(ratchet_pub)
-    except MeshCryptoError as exc:
-        raise RatchetError("invalid X25519 ratchet public key") from exc
 
 
 def _send_direction_label(role: SessionRole) -> bytes:
@@ -109,49 +78,6 @@ def _recv_direction_label(role: SessionRole) -> bytes:
     return HKDF_INFO_DIRECT_CHAIN_I2R
 
 
-def _derive_ratchet_root_key(local_key_pair: EncryptionKeyPair, remote_public_key: "X25519PublicKey",
-                             *, current_root_key: bytes) -> bytes:
-    """
-    Derive a refreshed root key from a DH ratchet step.
-
-    :param local_key_pair: Local X25519 ratchet key pair.
-    :param remote_public_key: Remote X25519 ratchet public key.
-    :param current_root_key: Current root key used as HKDF salt.
-    :return: Refreshed 32-byte root key.
-    :raises RatchetError: If DH or HKDF derivation fails.
-    """
-    try:
-        return derive_session_key(
-            local_key_pair.sk,
-            remote_public_key,
-            salt = current_root_key,
-            info = HKDF_INFO_DIRECT_RATCHET_ROOT,
-            length = _ROOT_KEY_LENGTH,
-        )
-    except MeshCryptoError as exc:
-        raise RatchetError("failed to derive DH ratchet root key") from exc
-
-
-def _derive_ratchet_chain_key(root_key: bytes, direction_label: bytes) -> bytes:
-    """
-    Derive a chain key from refreshed ratchet root material.
-
-    :param root_key: Refreshed root key.
-    :param direction_label: Directional chain label.
-    :return: New chain key.
-    :raises RatchetError: If HKDF derivation fails.
-    """
-    try:
-        return derive_key_hkdf(
-            root_key,
-            salt = None,
-            info = _build_ratchet_chain_info(direction_label),
-            length = _CHAIN_KEY_LENGTH,
-        )
-    except MeshCryptoError as exc:
-        raise RatchetError("failed to derive DH ratchet chain key") from exc
-
-
 def ratchet_public_key_bytes(key_pair: EncryptionKeyPair) -> bytes:
     """
     Export raw public bytes from an X25519 ratchet key pair.
@@ -160,10 +86,11 @@ def ratchet_public_key_bytes(key_pair: EncryptionKeyPair) -> bytes:
     :return: Raw public key bytes.
     :raises RatchetError: If public key export fails.
     """
-    try:
-        return EncryptionKeySerializer.export_public_key_raw(key_pair.pk)
-    except MeshCryptoError as exc:
-        raise RatchetError("invalid X25519 ratchet key pair") from exc
+    return remap_crypto_error(
+        lambda: EncryptionKeySerializer.export_public_key_raw(key_pair.pk),
+        error_cls = RatchetError,
+        message = "invalid X25519 ratchet key pair",
+    )
 
 
 def should_receive_ratchet(state: SessionState, ratchet_pub: bytes) -> bool:
@@ -192,16 +119,36 @@ def apply_outgoing_ratchet(state: SessionState) -> SessionState:
     """
     try:
         new_local_key_pair = EncryptionKeyPair.generate()
-        remote_public_key = _x25519_public_key_from_bytes(state.remote_ratchet_public_key)
 
-        new_root_key = _derive_ratchet_root_key(
-            new_local_key_pair,
-            remote_public_key,
-            current_root_key = state.root_key,
+        remote_public_key: X25519PublicKey = remap_crypto_error(
+            lambda: EncryptionKeySerializer.import_public_key_raw(
+                state.remote_ratchet_public_key
+            ),
+            error_cls = RatchetError,
+            message = "invalid X25519 ratchet public key",
         )
-        new_send_chain_key = _derive_ratchet_chain_key(
-            new_root_key,
-            _send_direction_label(state.role),
+
+        new_root_key = remap_crypto_error(
+            lambda: derive_session_key(
+                new_local_key_pair.sk,
+                remote_public_key,
+                salt = state.root_key,
+                info = HKDF_INFO_DIRECT_RATCHET_ROOT,
+                length = _ROOT_KEY_LENGTH,
+            ),
+            error_cls = RatchetError,
+            message = "failed to derive DH ratchet root key",
+        )
+
+        new_send_chain_key = remap_crypto_error(
+            lambda: derive_key_hkdf(
+                new_root_key,
+                salt = None,
+                info = _build_ratchet_chain_info(_send_direction_label(state.role)),
+                length = _CHAIN_KEY_LENGTH,
+            ),
+            error_cls = RatchetError,
+            message = "failed to derive DH ratchet send chain key",
         )
 
         return replace(
@@ -242,28 +189,60 @@ def apply_receive_ratchet(state: SessionState, *, new_remote_ratchet_public_key:
     :raises RatchetError: If ratchet transition fails.
     """
     try:
-        remote_public_key = _x25519_public_key_from_bytes(new_remote_ratchet_public_key)
-
-        recv_root_key = _derive_ratchet_root_key(
-            state.local_ratchet_key_pair,
-            remote_public_key,
-            current_root_key = state.root_key,
+        remote_public_key: X25519PublicKey = remap_crypto_error(
+            lambda: EncryptionKeySerializer.import_public_key_raw(
+                new_remote_ratchet_public_key
+            ),
+            error_cls = RatchetError,
+            message = "invalid X25519 ratchet public key",
         )
-        new_recv_chain_key = _derive_ratchet_chain_key(
-            recv_root_key,
-            _recv_direction_label(state.role),
+
+        recv_root_key = remap_crypto_error(
+            lambda: derive_session_key(
+                state.local_ratchet_key_pair.sk,
+                remote_public_key,
+                salt = state.root_key,
+                info = HKDF_INFO_DIRECT_RATCHET_ROOT,
+                length = _ROOT_KEY_LENGTH,
+            ),
+            error_cls = RatchetError,
+            message = "failed to derive DH ratchet receive root key",
+        )
+
+        new_recv_chain_key = remap_crypto_error(
+            lambda: derive_key_hkdf(
+                recv_root_key,
+                salt = None,
+                info = _build_ratchet_chain_info(_recv_direction_label(state.role)),
+                length = _CHAIN_KEY_LENGTH,
+            ),
+            error_cls = RatchetError,
+            message = "failed to derive DH ratchet receive chain key",
         )
 
         new_local_key_pair = EncryptionKeyPair.generate()
 
-        send_root_key = _derive_ratchet_root_key(
-            new_local_key_pair,
-            remote_public_key,
-            current_root_key = recv_root_key,
+        send_root_key = remap_crypto_error(
+            lambda: derive_session_key(
+                new_local_key_pair.sk,
+                remote_public_key,
+                salt = recv_root_key,
+                info = HKDF_INFO_DIRECT_RATCHET_ROOT,
+                length = _ROOT_KEY_LENGTH,
+            ),
+            error_cls = RatchetError,
+            message = "failed to derive DH ratchet send root key",
         )
-        new_send_chain_key = _derive_ratchet_chain_key(
-            send_root_key,
-            _send_direction_label(state.role),
+
+        new_send_chain_key = remap_crypto_error(
+            lambda: derive_key_hkdf(
+                send_root_key,
+                salt = None,
+                info = _build_ratchet_chain_info(_send_direction_label(state.role)),
+                length = _CHAIN_KEY_LENGTH,
+            ),
+            error_cls = RatchetError,
+            message = "failed to derive DH ratchet send chain key",
         )
 
         next_skipped_keys = (
