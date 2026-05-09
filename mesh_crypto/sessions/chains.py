@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .._internal import (
     UINT64_MAX,
+    frame_uint64,
     require_exact_length_bytes,
     require_uint64,
 )
@@ -9,7 +10,7 @@ from ..core.domain_separation import (
     HKDF_INFO_DIRECT_MESSAGE_KEY,
     HKDF_INFO_DIRECT_NEXT_CHAIN_KEY,
 )
-from ..errors import InvalidInputError, InvalidSessionStateError, SessionCounterError
+from ..errors import InvalidSessionStateError, SessionCounterError
 from ..primitives.kdf import derive_key_hkdf
 
 __all__ = [
@@ -22,58 +23,18 @@ _CHAIN_KEY_LENGTH = 32
 _MESSAGE_KEY_LENGTH = 32
 
 
-def _frame_uint64(value: int) -> bytes:
-    """
-    Encode uint64 counter as fixed-width big-endian bytes.
-
-    :param value: Counter value.
-    :return: 8-byte big-endian counter representation.
-    """
-    return value.to_bytes(8, "big")
-
-
-def _require_chain_key(chain_key: bytes) -> None:
-    """
-    Validate direct session chain key bytes.
-
-    :param chain_key: Chain key bytes.
-    :raises InvalidSessionStateError: If the chain key is invalid.
-    """
-    try:
-        require_exact_length_bytes(
-            chain_key,
-            field_name = "chain_key",
-            length = _CHAIN_KEY_LENGTH,
-        )
-    except InvalidInputError as exc:
-        raise InvalidSessionStateError("chain_key must be exactly 32 bytes") from exc
-
-
-def _require_chain_counter(counter: int) -> None:
-    """
-    Validate direct session chain counter.
-
-    :param counter: Message counter.
-    :raises SessionCounterError: If counter is not uint64.
-    """
-    try:
-        require_uint64(counter, field_name = "counter")
-    except InvalidInputError as exc:
-        raise SessionCounterError(str(exc)) from exc
-
-
 def _build_chain_info(label: bytes, counter: int) -> bytes:
     """
-    Build HKDF info for chain derivation.
+    Build canonical HKDF info for symmetric chain derivation.
 
     :param label: Domain separation label.
     :param counter: Message counter.
-    :return: Context-bound HKDF info bytes.
+    :return: Framed HKDF info bytes.
     """
     return (
             len(label).to_bytes(4, "big")
             + label
-            + counter.to_bytes(8, "big")
+            + frame_uint64(counter)
     )
 
 
@@ -90,8 +51,17 @@ def derive_message_key(chain_key: bytes, counter: int) -> bytes:
     :raises SessionCounterError: If counter is invalid.
     :raises InvalidKeyError: If HKDF derivation fails.
     """
-    _require_chain_key(chain_key)
-    _require_chain_counter(counter)
+    require_exact_length_bytes(
+        chain_key,
+        field_name = "chain_key",
+        length = _CHAIN_KEY_LENGTH,
+        error_cls = InvalidSessionStateError,
+    )
+    require_uint64(
+        counter,
+        field_name = "counter",
+        error_cls = SessionCounterError,
+    )
 
     return derive_key_hkdf(
         chain_key,
@@ -112,8 +82,17 @@ def derive_next_chain_key(chain_key: bytes, counter: int) -> bytes:
     :raises SessionCounterError: If counter is invalid.
     :raises InvalidKeyError: If HKDF derivation fails.
     """
-    _require_chain_key(chain_key)
-    _require_chain_counter(counter)
+    require_exact_length_bytes(
+        chain_key,
+        field_name = "chain_key",
+        length = _CHAIN_KEY_LENGTH,
+        error_cls = InvalidSessionStateError,
+    )
+    require_uint64(
+        counter,
+        field_name = "counter",
+        error_cls = SessionCounterError,
+    )
 
     return derive_key_hkdf(
         chain_key,
