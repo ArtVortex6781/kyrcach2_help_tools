@@ -12,4 +12,4 @@ __all__ = [
     "decrypt_storage_field",
 ]
 
-__version__ = "0.1.5"
+__version__ = "0.1.8"

@@ -4,7 +4,6 @@ from .._internal import (
     frame_labeled_bytes,
     frame_str,
     frame_uint32,
-    remap_crypto_error,
     require_exact_length_bytes,
     require_instance,
     require_non_empty_bytes,
@@ -13,16 +12,20 @@ from ..core.key_ids import KeyIdHelpers
 from ..core.key_types import KeyKind
 from ..core.types import KeyId
 from ..errors import (
-    AuthenticationError,
     InvalidKeyError,
     KeyNotFoundError,
     KeystoreNotLoadedError,
-    MalformedDataError,
-    MeshCryptoError,
     WrongKeyTypeError,
 )
 from ..keystore.file_keystore import FileKeyStore
 from ..primitives.aead import decrypt, encrypt
+from ._constants import (
+    STORAGE_AAD_CONTEXT,
+    STORAGE_FIELD_ALGORITHM,
+    STORAGE_FIELD_TYPE,
+    STORAGE_FIELD_VERSION,
+    STORAGE_KEY_LENGTH,
+)
 from .envelopes import StorageFieldEnvelope
 
 __all__ = [
@@ -32,29 +35,22 @@ __all__ = [
     "decrypt_storage_field_with_raw_key",
 ]
 
-_STORAGE_FIELD_VERSION = 1
-_STORAGE_FIELD_TYPE = "storage_field"
-_STORAGE_FIELD_ALGORITHM = "mesh-storage-v1"
-_STORAGE_KEY_LENGTH = 32
 
-_AAD_CONTEXT = b"mesh_crypto:storage_field_aad:v1"
-
-
-def _require_initialized_keystore(keystore: FileKeyStore) -> None:
+def _require_loaded_keystore(keystore: FileKeyStore) -> None:
     """
-    Validate that FileKeyStore is initialized for storage crypto operations.
+    Validate that FileKeyStore is loaded for storage crypto operations.
 
     This helper does not call load() implicitly. Opening/loading the keystore
     remains the caller's responsibility.
 
     :param keystore: File keystore instance.
     :raises InvalidInputError: If keystore has the wrong type.
-    :raises KeystoreNotLoadedError: If keystore master metadata does not exist.
+    :raises KeystoreNotLoadedError: If keystore is not loaded.
     """
     require_instance(keystore, FileKeyStore, field_name = "keystore")
 
-    if not keystore.exists():
-        raise KeystoreNotLoadedError("keystore is not initialized or loaded")
+    if not keystore.is_loaded():
+        raise KeystoreNotLoadedError("keystore is not loaded")
 
 
 def _build_storage_aad(*, key_id: KeyId,
@@ -70,10 +66,10 @@ def _build_storage_aad(*, key_id: KeyId,
     :return: Framed protocol AAD bytes.
     """
     return (
-            frame_labeled_bytes(b"context", _AAD_CONTEXT)
-            + frame_labeled_bytes(b"algorithm", frame_str(_STORAGE_FIELD_ALGORITHM))
-            + frame_labeled_bytes(b"type", frame_str(_STORAGE_FIELD_TYPE))
-            + frame_labeled_bytes(b"version", frame_uint32(_STORAGE_FIELD_VERSION))
+            frame_labeled_bytes(b"context", STORAGE_AAD_CONTEXT)
+            + frame_labeled_bytes(b"algorithm", frame_str(STORAGE_FIELD_ALGORITHM))
+            + frame_labeled_bytes(b"type", frame_str(STORAGE_FIELD_TYPE))
+            + frame_labeled_bytes(b"version", frame_uint32(STORAGE_FIELD_VERSION))
             + frame_labeled_bytes(b"key_id", frame_str(str(key_id)))
             + frame_labeled_bytes(b"user_aad", aad)
     )
@@ -86,16 +82,16 @@ def _load_storage_key_from_keystore(keystore: FileKeyStore, key_id: KeyId) -> by
     FileKeyStore remains responsible for key record loading/decryption. This
     helper only enforces the storage-crypto key kind and key length policy.
 
-    :param keystore: Initialized and loaded file keystore.
+    :param keystore: Loaded file keystore.
     :param key_id: Storage key identifier.
     :return: Raw 32-byte symmetric storage key.
     :raises InvalidInputError: If keystore has the wrong type.
-    :raises KeystoreNotLoadedError: If keystore master metadata does not exist.
+    :raises KeystoreNotLoadedError: If keystore is not loaded.
     :raises KeyNotFoundError: If key_id does not exist.
     :raises WrongKeyTypeError: If key kind is not symmetric.
     :raises InvalidKeyError: If key material is not a 32-byte storage key.
     """
-    _require_initialized_keystore(keystore)
+    _require_loaded_keystore(keystore)
 
     key_bytes, meta = keystore.get_key(key_id)
 
@@ -105,7 +101,7 @@ def _load_storage_key_from_keystore(keystore: FileKeyStore, key_id: KeyId) -> by
     require_exact_length_bytes(
         key_bytes,
         field_name = "storage_key",
-        length = _STORAGE_KEY_LENGTH,
+        length = STORAGE_KEY_LENGTH,
         error_cls = InvalidKeyError,
     )
     return key_bytes
@@ -116,14 +112,14 @@ def _resolve_storage_key_id(keystore: FileKeyStore,
     """
     Resolve explicit storage key id or current active keystore key id.
 
-    :param keystore: Initialized file keystore.
+    :param keystore: Loaded file keystore.
     :param key_id: Explicit storage key id or None.
     :return: Resolved storage key id.
     :raises InvalidInputError: If keystore or key_id is invalid.
-    :raises KeystoreNotLoadedError: If keystore master metadata does not exist.
+    :raises KeystoreNotLoadedError: If keystore is not loaded.
     :raises KeyNotFoundError: If key_id is omitted and no active key is set.
     """
-    _require_initialized_keystore(keystore)
+    _require_loaded_keystore(keystore)
 
     if key_id is not None:
         return KeyIdHelpers.normalize_key_id(key_id)
@@ -155,17 +151,13 @@ def encrypt_storage_field_with_raw_key(key: bytes, plaintext: bytes, *,
     require_exact_length_bytes(
         key,
         field_name = "storage_key",
-        length = _STORAGE_KEY_LENGTH,
+        length = STORAGE_KEY_LENGTH,
         error_cls = InvalidKeyError,
     )
     require_instance(plaintext, bytes, field_name = "plaintext")
     require_non_empty_bytes(aad, field_name = "aad")
 
-    normalized_key_id = remap_crypto_error(
-        lambda: KeyIdHelpers.normalize_key_id(key_id),
-        error_cls = MalformedDataError,
-        message = "invalid storage field key_id",
-    )
+    normalized_key_id = KeyIdHelpers.normalize_key_id(key_id)
 
     protocol_aad = _build_storage_aad(
         key_id = normalized_key_id,
@@ -174,57 +166,53 @@ def encrypt_storage_field_with_raw_key(key: bytes, plaintext: bytes, *,
     aead = encrypt(key, plaintext, aad = protocol_aad)
 
     return StorageFieldEnvelope(
-        version = _STORAGE_FIELD_VERSION,
-        type = _STORAGE_FIELD_TYPE,
-        algorithm = _STORAGE_FIELD_ALGORITHM,
+        version = STORAGE_FIELD_VERSION,
+        type = STORAGE_FIELD_TYPE,
+        algorithm = STORAGE_FIELD_ALGORITHM,
         key_id = normalized_key_id,
         aead = aead,
     ).to_bytes()
 
 
-def decrypt_storage_field_with_raw_key(key: bytes, envelope: bytes,
+def decrypt_storage_field_with_raw_key(key: bytes, envelope: StorageFieldEnvelope,
                                        *, aad: bytes) -> bytes:
     """
-    Decrypt storage field bytes using a raw storage key.
+    Decrypt a parsed storage field envelope using a raw storage key.
 
     This is a low-level foundation/test utility. Recommended integration should
-    use decrypt_storage_field() with FileKeyStore and the key_id embedded in the
-    StorageFieldEnvelope.
+    use decrypt_storage_field() with FileKeyStore and serialized envelope bytes.
 
     :param key: Raw 32-byte symmetric storage key.
-    :param envelope: Serialized StorageFieldEnvelope bytes.
+    :param envelope: Parsed StorageFieldEnvelope.
     :param aad: Mandatory caller-provided storage context AAD.
     :return: Decrypted storage field plaintext bytes.
     :raises InvalidInputError: If envelope or aad is invalid.
     :raises InvalidKeyError: If storage key is invalid.
-    :raises MalformedDataError: If envelope is malformed.
     :raises AuthenticationError: If AEAD authentication fails.
     """
     require_exact_length_bytes(
         key,
         field_name = "storage_key",
-        length = _STORAGE_KEY_LENGTH,
+        length = STORAGE_KEY_LENGTH,
         error_cls = InvalidKeyError,
     )
-    require_instance(envelope, bytes, field_name = "envelope")
+    require_instance(
+        envelope,
+        StorageFieldEnvelope,
+        field_name = "envelope",
+    )
     require_non_empty_bytes(aad, field_name = "aad")
 
-    storage_envelope = StorageFieldEnvelope.from_bytes(envelope)
     protocol_aad = _build_storage_aad(
-        key_id = storage_envelope.key_id,
+        key_id = envelope.key_id,
         aad = aad,
     )
 
-    try:
-        return decrypt(
-            key,
-            storage_envelope.aead,
-            aad = protocol_aad,
-        )
-    except AuthenticationError:
-        raise
-    except MeshCryptoError as exc:
-        raise MalformedDataError("failed to decrypt storage field envelope") from exc
+    return decrypt(
+        key,
+        envelope.aead,
+        aad = protocol_aad,
+    )
 
 
 def encrypt_storage_field(keystore: FileKeyStore, plaintext: bytes, *,
@@ -237,13 +225,13 @@ def encrypt_storage_field(keystore: FileKeyStore, plaintext: bytes, *,
     resolve the original key from the envelope instead of using the current
     active key.
 
-    :param keystore: Initialized and loaded file keystore.
+    :param keystore: Loaded file keystore.
     :param plaintext: Storage field plaintext bytes.
     :param aad: Mandatory caller-provided storage context AAD.
     :param key_id: Optional explicit storage key id. If omitted, active key is used.
     :return: Serialized StorageFieldEnvelope bytes.
     :raises InvalidInputError: If inputs are invalid.
-    :raises KeystoreNotLoadedError: If keystore master metadata does not exist.
+    :raises KeystoreNotLoadedError: If keystore is not loaded.
     :raises KeyNotFoundError: If explicit key does not exist or active key is not set.
     :raises WrongKeyTypeError: If resolved key is not symmetric.
     :raises InvalidKeyError: If resolved key material is invalid.
@@ -267,19 +255,20 @@ def decrypt_storage_field(keystore: FileKeyStore, envelope: bytes, *,
     The current active key is not used for decryption. This keeps old records
     decryptable after storage/data active key rotation.
 
-    :param keystore: Initialized and loaded file keystore.
+    :param keystore: Loaded file keystore.
     :param envelope: Serialized StorageFieldEnvelope bytes.
     :param aad: Mandatory caller-provided storage context AAD.
     :return: Decrypted storage field plaintext bytes.
     :raises InvalidInputError: If inputs are invalid.
-    :raises KeystoreNotLoadedError: If keystore master metadata does not exist.
+    :raises KeystoreNotLoadedError: If keystore is not loaded.
     :raises KeyNotFoundError: If envelope key_id does not exist.
     :raises WrongKeyTypeError: If envelope key_id does not reference a symmetric key.
     :raises InvalidKeyError: If storage key material is invalid.
     :raises MalformedDataError: If envelope is malformed.
+    :raises UnsupportedFormatError: If envelope version/type/algorithm is unsupported.
     :raises AuthenticationError: If AEAD authentication fails.
     """
-    _require_initialized_keystore(keystore)
+    _require_loaded_keystore(keystore)
     require_instance(envelope, bytes, field_name = "envelope")
     require_non_empty_bytes(aad, field_name = "aad")
 
@@ -291,6 +280,6 @@ def decrypt_storage_field(keystore: FileKeyStore, envelope: bytes, *,
 
     return decrypt_storage_field_with_raw_key(
         storage_key,
-        envelope,
+        storage_envelope,
         aad = aad,
     )

@@ -21,20 +21,14 @@ from ..core.key_ids import KeyIdHelpers
 from ..core.types import KeyId
 from ..errors import InvalidInputError, MalformedDataError
 from ..primitives.envelopes import AeadEnvelope
+from ._constants import (
+    STORAGE_FIELD_ALGORITHM,
+    STORAGE_FIELD_KEYS,
+    STORAGE_FIELD_TYPE,
+    STORAGE_FIELD_VERSION,
+)
 
 __all__ = ["StorageFieldEnvelope"]
-
-_STORAGE_FIELD_VERSION = 1
-_STORAGE_FIELD_TYPE = "storage_field"
-_STORAGE_FIELD_ALGORITHM = "mesh-storage-v1"
-
-_STORAGE_FIELD_KEYS = {
-    "version",
-    "type",
-    "algorithm",
-    "key_id",
-    "aead",
-}
 
 
 @dataclass(frozen = True)
@@ -65,9 +59,9 @@ class StorageFieldEnvelope:
         require_str(self.algorithm, field_name = "algorithm", error_cls = MalformedDataError)
         require_instance(self.aead, AeadEnvelope, field_name = "aead", error_cls = MalformedDataError)
 
-        require_supported_version(self.version, _STORAGE_FIELD_VERSION)
-        require_supported_type(self.type, _STORAGE_FIELD_TYPE)
-        require_supported_algorithm(self.algorithm, _STORAGE_FIELD_ALGORITHM)
+        require_supported_version(self.version, STORAGE_FIELD_VERSION)
+        require_supported_type(self.type, STORAGE_FIELD_TYPE)
+        require_supported_algorithm(self.algorithm, STORAGE_FIELD_ALGORITHM)
 
         object.__setattr__(
             self,
@@ -113,7 +107,7 @@ class StorageFieldEnvelope:
         require_instance(data, dict, field_name = "data", error_cls = MalformedDataError)
         require_exact_keys(
             data,
-            _STORAGE_FIELD_KEYS,
+            STORAGE_FIELD_KEYS,
             schema_name = "storage field envelope",
         )
 
