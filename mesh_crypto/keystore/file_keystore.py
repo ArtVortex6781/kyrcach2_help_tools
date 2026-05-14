@@ -109,6 +109,17 @@ class FileKeyStore:
         """
         return self._master_meta_path.exists()
 
+    def is_loaded(self) -> bool:
+        """
+        Return whether plaintext master key material is currently loaded.
+
+        This does not check whether keystore files exist on disk. It only reports
+        whether the in-memory keystore state is ready for key operations.
+
+        :return: True if master key material is currently loaded.
+        """
+        return self._master_key is not None
+
     def create_new(self, overwrite: bool = False) -> None:
         """
         Create a new keystore with a fresh master key.
