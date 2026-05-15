@@ -21,6 +21,7 @@ from ..errors import (
     SessionCounterError,
     SkippedKeyLimitError,
 )
+from ._constants import SESSION_VERSION, SESSION_ALGORITHM, DEFAULT_MAX_SKIP
 
 __all__ = [
     "SessionId",
@@ -31,15 +32,10 @@ __all__ = [
 
 SessionId = KeyId
 
-_SESSION_VERSION = 1
-_SESSION_ALGORITHM = "mesh-direct-v1"
-
 _KEY_LENGTH = 32
 _IDENTITY_PUBLIC_KEY_LENGTH = 32
 _RATCHET_PUBLIC_KEY_LENGTH = 32
 _MESSAGE_KEY_LENGTH = 32
-
-_DEFAULT_MAX_SKIP = 600
 
 
 class SessionRole(str, Enum):
@@ -167,13 +163,13 @@ class SessionState:
 
         require_supported_version(
             self.version,
-            _SESSION_VERSION,
+            SESSION_VERSION,
             error_cls = InvalidSessionStateError,
         )
 
         require_supported_algorithm(
             self.algorithm,
-            _SESSION_ALGORITHM,
+            SESSION_ALGORITHM,
             error_cls = InvalidSessionStateError,
         )
 
@@ -279,10 +275,10 @@ class SessionState:
             error_cls = InvalidSessionStateError,
         )
 
-        if len(self.skipped_message_keys) > _DEFAULT_MAX_SKIP:
+        if len(self.skipped_message_keys) > DEFAULT_MAX_SKIP:
             raise SkippedKeyLimitError(
                 f"skipped message key cache exceeds limit: "
-                f"{len(self.skipped_message_keys)} > {_DEFAULT_MAX_SKIP}"
+                f"{len(self.skipped_message_keys)} > {DEFAULT_MAX_SKIP}"
             )
 
         seen: set[tuple[bytes, int]] = set()

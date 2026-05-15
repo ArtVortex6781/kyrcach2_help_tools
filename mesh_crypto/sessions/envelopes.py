@@ -25,12 +25,14 @@ from ..core.key_ids import KeyIdHelpers
 from ..core.types import KeyId
 from ..errors import InvalidInputError, MalformedDataError
 from ..primitives.envelopes import AeadEnvelope
+from ._constants import (
+    DIRECT_MESSAGE_ALGORITHM,
+    DIRECT_MESSAGE_TYPE,
+    DIRECT_MESSAGE_VERSION,
+)
 
 __all__ = ["DirectMessageEnvelope"]
 
-_DIRECT_MESSAGE_VERSION = 1
-_DIRECT_MESSAGE_TYPE = "direct_message"
-_DIRECT_MESSAGE_ALGORITHM = "mesh-direct-v1"
 _RATCHET_PUBLIC_KEY_LENGTH = 32
 
 _DIRECT_MESSAGE_KEYS = {
@@ -93,9 +95,9 @@ class DirectMessageEnvelope:
             error_cls = MalformedDataError,
         )
 
-        require_supported_version(self.version, _DIRECT_MESSAGE_VERSION)
-        require_supported_type(self.type, _DIRECT_MESSAGE_TYPE)
-        require_supported_algorithm(self.algorithm, _DIRECT_MESSAGE_ALGORITHM)
+        require_supported_version(self.version, DIRECT_MESSAGE_VERSION)
+        require_supported_type(self.type, DIRECT_MESSAGE_TYPE)
+        require_supported_algorithm(self.algorithm, DIRECT_MESSAGE_ALGORITHM)
 
         object.__setattr__(
             self,

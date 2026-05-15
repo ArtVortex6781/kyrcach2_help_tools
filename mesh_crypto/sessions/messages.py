@@ -18,6 +18,12 @@ from ..errors import (
     SkippedKeyLimitError,
 )
 from ..primitives.aead import decrypt, encrypt
+from ._constants import (
+    DEFAULT_MAX_SKIP,
+    DIRECT_MESSAGE_ALGORITHM,
+    DIRECT_MESSAGE_TYPE,
+    DIRECT_MESSAGE_VERSION,
+)
 from .chains import advance_chain
 from .envelopes import DirectMessageEnvelope
 from .ratchet import (
@@ -32,12 +38,6 @@ __all__ = [
     "encrypt_direct_message",
     "decrypt_direct_message",
 ]
-
-_DIRECT_MESSAGE_VERSION = 1
-_DIRECT_MESSAGE_TYPE = "direct_message"
-_DIRECT_MESSAGE_ALGORITHM = "mesh-direct-v1"
-
-_DEFAULT_MAX_SKIP = 600
 
 
 def _build_direct_message_aad(*, session_id: object, counter: int,
@@ -62,9 +62,9 @@ def _build_direct_message_aad(*, session_id: object, counter: int,
 
     return (
             frame_labeled_bytes(b"context", AAD_PURPOSE_DIRECT_MESSAGE)
-            + frame_labeled_bytes(b"version", frame_uint32(_DIRECT_MESSAGE_VERSION))
-            + frame_labeled_bytes(b"type", frame_str(_DIRECT_MESSAGE_TYPE))
-            + frame_labeled_bytes(b"algorithm", frame_str(_DIRECT_MESSAGE_ALGORITHM))
+            + frame_labeled_bytes(b"version", frame_uint32(DIRECT_MESSAGE_VERSION))
+            + frame_labeled_bytes(b"type", frame_str(DIRECT_MESSAGE_TYPE))
+            + frame_labeled_bytes(b"algorithm", frame_str(DIRECT_MESSAGE_ALGORITHM))
             + frame_labeled_bytes(b"session_id", frame_str(str(session_id)))
             + frame_labeled_bytes(b"counter", frame_uint64(counter))
             + frame_labeled_bytes(b"previous_chain_length", frame_uint64(previous_chain_length))
@@ -119,10 +119,10 @@ def _ensure_skipped_capacity(skipped_message_keys: tuple[SkippedMessageKey, ...]
     if additional_count < 0:
         raise OutOfOrderMessageError("cannot derive skipped keys for a stale counter")
 
-    if additional_count > _DEFAULT_MAX_SKIP:
+    if additional_count > DEFAULT_MAX_SKIP:
         raise SkippedKeyLimitError("message counter gap exceeds skipped-key limit")
 
-    if len(skipped_message_keys) + additional_count > _DEFAULT_MAX_SKIP:
+    if len(skipped_message_keys) + additional_count > DEFAULT_MAX_SKIP:
         raise SkippedKeyLimitError("skipped message key cache limit exceeded")
 
 
@@ -320,12 +320,12 @@ def encrypt_direct_message(state: SessionState, plaintext: bytes,
     )
 
     envelope = DirectMessageEnvelope(
-        version = _DIRECT_MESSAGE_VERSION,
-        type = _DIRECT_MESSAGE_TYPE,
+        version = DIRECT_MESSAGE_VERSION,
+        type = DIRECT_MESSAGE_TYPE,
         session_id = candidate_state.session_id,
         counter = candidate_state.send_counter,
         previous_chain_length = candidate_state.previous_send_chain_length,
-        algorithm = _DIRECT_MESSAGE_ALGORITHM,
+        algorithm = DIRECT_MESSAGE_ALGORITHM,
         ratchet_pub = ratchet_pub,
         aead = aead,
     )
