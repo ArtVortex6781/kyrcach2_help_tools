@@ -95,6 +95,8 @@ def require_signing_key_matches_public_key(keystore: FileKeyStore, key_id: KeyId
         error_cls = InvalidKeyError,
     )
 
+    _require_initialized_keystore(keystore)
+
     _, meta = keystore.get_key(key_id)
 
     if meta.get("kind") != KeyKind.ED25519.value:
