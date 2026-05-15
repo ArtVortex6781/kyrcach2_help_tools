@@ -43,10 +43,16 @@ from ..errors import (
     MalformedDataError,
 )
 from ..keystore.file_keystore import FileKeyStore
-from ..keystore.operations import sign_with_key
+from ..keystore.operations import sign_with_key, require_signing_key_matches_public_key
 from ..primitives.dh import derive_session_key
 from ..primitives.kdf import derive_key_hkdf
 from ..primitives.signatures import verify
+from ._constants import (
+    HANDSHAKE_ALGORITHM,
+    HANDSHAKE_INIT_TYPE,
+    HANDSHAKE_RESPONSE_TYPE,
+    HANDSHAKE_VERSION,
+)
 from .ratchet import ratchet_public_key_bytes
 from .state import SessionRole, SessionState
 
@@ -58,11 +64,6 @@ __all__ = [
     "accept_direct_handshake_init",
     "complete_direct_handshake",
 ]
-
-_HANDSHAKE_VERSION = 1
-_HANDSHAKE_ALGORITHM = "mesh-direct-v1"
-_HANDSHAKE_INIT_TYPE = "direct_handshake_init"
-_HANDSHAKE_RESPONSE_TYPE = "direct_handshake_response"
 
 _KEY_LENGTH = 32
 _IDENTITY_PUBLIC_KEY_LENGTH = 32
@@ -110,6 +111,21 @@ def _transcript_hash(transcript: bytes) -> bytes:
     return hashlib.sha256(transcript).digest()
 
 
+def _full_handshake_hash(init_transcript: bytes,
+                         response_transcript: bytes) -> bytes:
+    """
+    Hash framed init/response handshake transcripts.
+
+    :param init_transcript: Canonical initiator handshake transcript bytes.
+    :param response_transcript: Canonical responder handshake transcript bytes.
+    :return: SHA-256 hash over framed full handshake transcript data.
+    """
+    return _transcript_hash(
+        frame_labeled_bytes(b"init_transcript", init_transcript)
+        + frame_labeled_bytes(b"response_transcript", response_transcript)
+    )
+
+
 def _build_init_transcript(*, session_id: KeyId, initiator_identity_key_id: KeyId,
                            initiator_identity_public_key: bytes,
                            initiator_ratchet_public_key: bytes) -> bytes:
@@ -124,9 +140,9 @@ def _build_init_transcript(*, session_id: KeyId, initiator_identity_key_id: KeyI
     """
     return (
             frame_labeled_bytes(b"context", _TRANSCRIPT_CONTEXT_INIT)
-            + frame_labeled_bytes(b"version", frame_uint32(_HANDSHAKE_VERSION))
-            + frame_labeled_bytes(b"type", frame_str(_HANDSHAKE_INIT_TYPE))
-            + frame_labeled_bytes(b"algorithm", frame_str(_HANDSHAKE_ALGORITHM))
+            + frame_labeled_bytes(b"version", frame_uint32(HANDSHAKE_VERSION))
+            + frame_labeled_bytes(b"type", frame_str(HANDSHAKE_INIT_TYPE))
+            + frame_labeled_bytes(b"algorithm", frame_str(HANDSHAKE_ALGORITHM))
             + frame_labeled_bytes(b"session_id", frame_str(str(session_id)))
             + frame_labeled_bytes(b"initiator_identity_key_id",
                                   frame_str(str(initiator_identity_key_id)))
@@ -159,9 +175,9 @@ def _build_response_transcript(*, session_id: KeyId, init_transcript_hash: bytes
     """
     return (
             frame_labeled_bytes(b"context", _TRANSCRIPT_CONTEXT_RESPONSE)
-            + frame_labeled_bytes(b"version", frame_uint32(_HANDSHAKE_VERSION))
-            + frame_labeled_bytes(b"type", frame_str(_HANDSHAKE_RESPONSE_TYPE))
-            + frame_labeled_bytes(b"algorithm", frame_str(_HANDSHAKE_ALGORITHM))
+            + frame_labeled_bytes(b"version", frame_uint32(HANDSHAKE_VERSION))
+            + frame_labeled_bytes(b"type", frame_str(HANDSHAKE_RESPONSE_TYPE))
+            + frame_labeled_bytes(b"algorithm", frame_str(HANDSHAKE_ALGORITHM))
             + frame_labeled_bytes(b"session_id", frame_str(str(session_id)))
             + frame_labeled_bytes(b"init_transcript_hash", init_transcript_hash)
             + frame_labeled_bytes(b"initiator_identity_key_id",
@@ -310,8 +326,8 @@ def _create_session_state(*, session_id: KeyId, role: SessionRole,
         recv_chain_key = chain_i2r
 
     return SessionState(
-        version = _HANDSHAKE_VERSION,
-        algorithm = _HANDSHAKE_ALGORITHM,
+        version = HANDSHAKE_VERSION,
+        algorithm = HANDSHAKE_ALGORITHM,
         session_id = session_id,
         role = role,
         local_identity_key_id = local_identity_key_id,
@@ -356,8 +372,8 @@ class PendingDirectHandshake:
         """
         require_int(self.version, field_name = "version", error_cls = HandshakeError)
         require_str(self.algorithm, field_name = "algorithm", error_cls = HandshakeError)
-        require_supported_version(self.version, _HANDSHAKE_VERSION, error_cls = HandshakeError)
-        require_supported_algorithm(self.algorithm, _HANDSHAKE_ALGORITHM, error_cls = HandshakeError)
+        require_supported_version(self.version, HANDSHAKE_VERSION, error_cls = HandshakeError)
+        require_supported_algorithm(self.algorithm, HANDSHAKE_ALGORITHM, error_cls = HandshakeError)
 
         object.__setattr__(
             self,
@@ -430,9 +446,9 @@ class DirectHandshakeInit:
         require_str(self.type, field_name = "type", error_cls = MalformedDataError)
         require_str(self.algorithm, field_name = "algorithm", error_cls = MalformedDataError)
 
-        require_supported_version(self.version, _HANDSHAKE_VERSION)
-        require_supported_type(self.type, _HANDSHAKE_INIT_TYPE)
-        require_supported_algorithm(self.algorithm, _HANDSHAKE_ALGORITHM)
+        require_supported_version(self.version, HANDSHAKE_VERSION)
+        require_supported_type(self.type, HANDSHAKE_INIT_TYPE)
+        require_supported_algorithm(self.algorithm, HANDSHAKE_ALGORITHM)
 
         object.__setattr__(
             self,
@@ -601,9 +617,9 @@ class DirectHandshakeResponse:
         require_str(self.type, field_name = "type", error_cls = MalformedDataError)
         require_str(self.algorithm, field_name = "algorithm", error_cls = MalformedDataError)
 
-        require_supported_version(self.version, _HANDSHAKE_VERSION)
-        require_supported_type(self.type, _HANDSHAKE_RESPONSE_TYPE)
-        require_supported_algorithm(self.algorithm, _HANDSHAKE_ALGORITHM)
+        require_supported_version(self.version, HANDSHAKE_VERSION)
+        require_supported_type(self.type, HANDSHAKE_RESPONSE_TYPE)
+        require_supported_algorithm(self.algorithm, HANDSHAKE_ALGORITHM)
 
         object.__setattr__(
             self,
@@ -823,6 +839,16 @@ def create_direct_handshake_init(keystore: FileKeyStore, identity_key_id: KeyId 
         error_cls = HandshakeError,
     )
 
+    remap_crypto_error(
+        lambda: require_signing_key_matches_public_key(
+            keystore,
+            local_identity_key_id,
+            identity_public_key,
+        ),
+        error_cls = HandshakeError,
+        message = "local identity public key does not match keystore signing key",
+    )
+
     session_id = uuid.uuid4()
     local_ratchet_key_pair = EncryptionKeyPair.generate()
     local_ratchet_public_key = ratchet_public_key_bytes(local_ratchet_key_pair)
@@ -842,9 +868,9 @@ def create_direct_handshake_init(keystore: FileKeyStore, identity_key_id: KeyId 
     )
 
     init = DirectHandshakeInit(
-        version = _HANDSHAKE_VERSION,
-        type = _HANDSHAKE_INIT_TYPE,
-        algorithm = _HANDSHAKE_ALGORITHM,
+        version = HANDSHAKE_VERSION,
+        type = HANDSHAKE_INIT_TYPE,
+        algorithm = HANDSHAKE_ALGORITHM,
         session_id = session_id,
         initiator_identity_key_id = local_identity_key_id,
         initiator_identity_public_key = identity_public_key,
@@ -853,8 +879,8 @@ def create_direct_handshake_init(keystore: FileKeyStore, identity_key_id: KeyId 
     )
 
     pending = PendingDirectHandshake(
-        version = _HANDSHAKE_VERSION,
-        algorithm = _HANDSHAKE_ALGORITHM,
+        version = HANDSHAKE_VERSION,
+        algorithm = HANDSHAKE_ALGORITHM,
         session_id = session_id,
         local_identity_key_id = local_identity_key_id,
         local_identity_public_key = identity_public_key,
@@ -895,6 +921,16 @@ def accept_direct_handshake_init(keystore: FileKeyStore, identity_key_id: KeyId 
         error_cls = HandshakeError,
     )
 
+    remap_crypto_error(
+        lambda: require_signing_key_matches_public_key(
+            keystore,
+            local_identity_key_id,
+            identity_public_key,
+        ),
+        error_cls = HandshakeError,
+        message = "local identity public key does not match keystore signing key",
+    )
+
     _require_expected_identity(
         actual_identity_public_key = init.initiator_identity_public_key,
         expected_identity_public_key = expected_peer_identity_public_key,
@@ -930,9 +966,9 @@ def accept_direct_handshake_init(keystore: FileKeyStore, identity_key_id: KeyId 
     )
 
     response = DirectHandshakeResponse(
-        version = _HANDSHAKE_VERSION,
-        type = _HANDSHAKE_RESPONSE_TYPE,
-        algorithm = _HANDSHAKE_ALGORITHM,
+        version = HANDSHAKE_VERSION,
+        type = HANDSHAKE_RESPONSE_TYPE,
+        algorithm = HANDSHAKE_ALGORITHM,
         session_id = init.session_id,
         init_transcript_hash = init_hash,
         initiator_identity_key_id = init.initiator_identity_key_id,
@@ -944,7 +980,10 @@ def accept_direct_handshake_init(keystore: FileKeyStore, identity_key_id: KeyId 
         signature = response_signature,
     )
 
-    full_handshake_hash = _transcript_hash(init_transcript + response_transcript)
+    full_handshake_hash = _full_handshake_hash(
+        init_transcript,
+        response_transcript,
+    )
 
     state = _create_session_state(
         session_id = init.session_id,
@@ -1007,7 +1046,10 @@ def complete_direct_handshake(pending: PendingDirectHandshake, init: DirectHands
         signature = response.signature,
     )
 
-    full_handshake_hash = _transcript_hash(init.transcript() + response_transcript)
+    full_handshake_hash = _full_handshake_hash(
+        init.transcript(),
+        response_transcript,
+    )
 
     return _create_session_state(
         session_id = pending.session_id,
