@@ -11,7 +11,6 @@ from mesh_crypto.errors import (
     HandshakeError,
     KeystoreNotLoadedError,
     SignatureVerificationError,
-    WrongKeyTypeError,
 )
 from mesh_crypto.keystore import FileKeyStore, PasswordProtector
 from mesh_crypto.sessions import (
@@ -25,11 +24,6 @@ from mesh_crypto.sessions import (
     create_direct_handshake_init,
 )
 from mesh_crypto.sessions.ratchet import ratchet_public_key_bytes
-
-
-@pytest.fixture
-def protector() -> PasswordProtector:
-    return PasswordProtector(password = "correct horse battery staple")
 
 
 def make_keystore(tmp_path, name: str) -> FileKeyStore:
@@ -166,6 +160,99 @@ class TestDirectHandshakeHappyPath:
         assert bob_state.recv_counter == 0
         assert alice_state.skipped_message_keys == ()
         assert bob_state.skipped_message_keys == ()
+
+
+class TestDirectHandshakeLocalIdentityConsistency:
+    def test_create_init_rejects_identity_public_key_that_does_not_match_local_keystore_key(
+            self,
+            alice_keystore: FileKeyStore,
+            bob_identity,
+    ) -> None:
+        alice_key_id, _alice_public_key = generate_identity(alice_keystore)
+        _other_key_id, other_alice_public_key = generate_identity(alice_keystore)
+        _bob_key_id, bob_public_key = bob_identity
+
+        with pytest.raises(HandshakeError):
+            create_direct_handshake_init(
+                alice_keystore,
+                alice_key_id,
+                other_alice_public_key,
+                expected_peer_identity_public_key = bob_public_key,
+            )
+
+    def test_accept_init_rejects_identity_public_key_that_does_not_match_local_keystore_key(
+            self,
+            alice_keystore: FileKeyStore,
+            bob_keystore: FileKeyStore,
+            alice_identity,
+            bob_identity,
+    ) -> None:
+        alice_identity_key_id, alice_public_key = alice_identity
+        _bob_identity_key_id, bob_public_key = bob_identity
+
+        pending, init = create_direct_handshake_init(
+            alice_keystore,
+            alice_identity_key_id,
+            alice_public_key,
+            expected_peer_identity_public_key = bob_public_key,
+        )
+        assert isinstance(pending, PendingDirectHandshake)
+
+        bob_key_id, _matching_bob_public_key = generate_identity(bob_keystore)
+        _other_bob_key_id, other_bob_public_key = generate_identity(bob_keystore)
+
+        with pytest.raises(HandshakeError):
+            accept_direct_handshake_init(
+                bob_keystore,
+                bob_key_id,
+                other_bob_public_key,
+                expected_peer_identity_public_key = alice_public_key,
+                init = init,
+            )
+
+    def test_create_init_with_non_ed25519_identity_key_raises_handshake_error(
+            self,
+            alice_keystore: FileKeyStore,
+            bob_identity,
+    ) -> None:
+        _bob_identity_key_id, bob_public_key = bob_identity
+        wrong_key_id = alice_keystore.generate_key(KeyKind.X25519)
+
+        with pytest.raises(HandshakeError):
+            create_direct_handshake_init(
+                alice_keystore,
+                wrong_key_id,
+                b"a" * 32,
+                expected_peer_identity_public_key = bob_public_key,
+            )
+
+    def test_accept_init_with_non_ed25519_identity_key_raises_handshake_error(
+            self,
+            alice_keystore: FileKeyStore,
+            bob_keystore: FileKeyStore,
+            alice_identity,
+            bob_identity,
+    ) -> None:
+        alice_identity_key_id, alice_public_key = alice_identity
+        _bob_identity_key_id, bob_public_key = bob_identity
+
+        _pending, init = create_direct_handshake_init(
+            alice_keystore,
+            alice_identity_key_id,
+            alice_public_key,
+            expected_peer_identity_public_key = bob_public_key,
+        )
+
+        wrong_key_id = bob_keystore.generate_key(KeyKind.SYMMETRIC)
+
+        with pytest.raises(HandshakeError):
+            accept_direct_handshake_init(
+                bob_keystore,
+                wrong_key_id,
+                b"b" * 32,
+                expected_peer_identity_public_key = alice_public_key,
+                init = init,
+            )
 
 
 class TestDirectHandshakeInitFailures:
@@ -452,7 +539,7 @@ class TestDirectHandshakeResponseFailures:
                 expected_peer_identity_public_key = bob_public_key,
             )
 
-    def test_response_that_changes_initiator_identity_fields_fails_on_complete(
+    def test_response_that_changes_initiator_identity_key_id_fails_on_complete(
             self,
             alice_keystore: FileKeyStore,
             bob_keystore: FileKeyStore,
@@ -476,6 +563,45 @@ class TestDirectHandshakeResponseFailures:
             init_transcript_hash = response.init_transcript_hash,
             initiator_identity_key_id = KeyIdHelpers.new_key_id(),
             initiator_identity_public_key = response.initiator_identity_public_key,
+            initiator_ratchet_public_key = response.initiator_ratchet_public_key,
+            responder_identity_key_id = response.responder_identity_key_id,
+            responder_identity_public_key = response.responder_identity_public_key,
+            responder_ratchet_public_key = response.responder_ratchet_public_key,
+            signature = response.signature,
+        )
+
+        with pytest.raises(HandshakeError):
+            complete_direct_handshake(
+                pending,
+                init,
+                tampered_response,
+                expected_peer_identity_public_key = bob_public_key,
+            )
+
+    def test_response_that_changes_initiator_identity_public_key_fails_on_complete(
+            self,
+            alice_keystore: FileKeyStore,
+            bob_keystore: FileKeyStore,
+            alice_identity,
+            bob_identity,
+    ) -> None:
+        _bob_identity_key_id, bob_public_key = bob_identity
+
+        pending, init, _bob_state, response, _alice_state = run_handshake(
+            alice_keystore = alice_keystore,
+            bob_keystore = bob_keystore,
+            alice_identity = alice_identity,
+            bob_identity = bob_identity,
+        )
+
+        tampered_response = DirectHandshakeResponse(
+            version = response.version,
+            type = response.type,
+            algorithm = response.algorithm,
+            session_id = response.session_id,
+            init_transcript_hash = response.init_transcript_hash,
+            initiator_identity_key_id = response.initiator_identity_key_id,
+            initiator_identity_public_key = b"q" * 32,
             initiator_ratchet_public_key = response.initiator_ratchet_public_key,
             responder_identity_key_id = response.responder_identity_key_id,
             responder_identity_public_key = response.responder_identity_public_key,
@@ -544,26 +670,10 @@ class TestDirectHandshakeSigningFailures:
         )
         identity_key_id = KeyIdHelpers.new_key_id()
 
-        with pytest.raises(KeystoreNotLoadedError):
+        with pytest.raises(HandshakeError):
             create_direct_handshake_init(
                 unloaded,
                 identity_key_id,
-                b"a" * 32,
-                expected_peer_identity_public_key = bob_public_key,
-            )
-
-    def test_create_init_with_non_ed25519_signing_key_raises_wrong_key_type_error(
-            self,
-            alice_keystore: FileKeyStore,
-            bob_identity,
-    ) -> None:
-        _bob_identity_key_id, bob_public_key = bob_identity
-        wrong_key_id = alice_keystore.generate_key(KeyKind.X25519)
-
-        with pytest.raises(WrongKeyTypeError):
-            create_direct_handshake_init(
-                alice_keystore,
-                wrong_key_id,
                 b"a" * 32,
                 expected_peer_identity_public_key = bob_public_key,
             )
