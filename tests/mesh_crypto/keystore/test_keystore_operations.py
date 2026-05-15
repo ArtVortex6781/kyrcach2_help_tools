@@ -10,10 +10,16 @@ from mesh_crypto.core import (
 )
 from mesh_crypto.errors import (
     InvalidInputError,
+    KeyMismatchError,
     KeystoreNotLoadedError,
     WrongKeyTypeError,
+    InvalidKeyError
 )
-from mesh_crypto.keystore import FileKeyStore, PasswordProtector, sign_with_key
+from mesh_crypto.keystore import FileKeyStore, PasswordProtector
+from mesh_crypto.keystore.operations import (
+    require_signing_key_matches_public_key,
+    sign_with_key,
+)
 from mesh_crypto.primitives import verify
 
 
@@ -34,18 +40,107 @@ def keystore(keystore_path, protector: PasswordProtector) -> FileKeyStore:
     return store
 
 
+def signing_public_key_bytes(
+        keystore: FileKeyStore,
+        key_id,
+) -> bytes:
+    key_bytes, _meta = keystore.get_key(key_id)
+    key_pair = SigningKeySerializer.restore_pair_from_private_bytes(key_bytes)
+    return SigningKeySerializer.export_pair_public_key_raw(key_pair)
+
+
 def assert_signature_valid(
-    keystore: FileKeyStore,
-    key_id,
-    *,
-    context: bytes,
-    data: bytes,
-    signature: bytes,
+        keystore: FileKeyStore,
+        key_id,
+        *,
+        context: bytes,
+        data: bytes,
+        signature: bytes,
 ) -> None:
     key_bytes, _meta = keystore.get_key(key_id)
     key_pair = SigningKeySerializer.restore_pair_from_private_bytes(key_bytes)
 
     verify(context, data, signature, key_pair.pk)
+
+
+class TestRequireSigningKeyMatchesPublicKey:
+    def test_matching_ed25519_key_and_public_key_passes(self, keystore: FileKeyStore) -> None:
+        key_id = keystore.generate_key(KeyKind.ED25519)
+        public_key = signing_public_key_bytes(keystore, key_id)
+
+        require_signing_key_matches_public_key(
+            keystore,
+            key_id,
+            public_key,
+        )
+
+    def test_mismatched_ed25519_public_key_raises_key_mismatch_error(
+            self,
+            keystore: FileKeyStore,
+    ) -> None:
+        first_key_id = keystore.generate_key(KeyKind.ED25519)
+        second_key_id = keystore.generate_key(KeyKind.ED25519)
+        second_public_key = signing_public_key_bytes(keystore, second_key_id)
+
+        with pytest.raises(InvalidKeyError):
+            require_signing_key_matches_public_key(
+                keystore,
+                first_key_id,
+                second_public_key,
+            )
+
+    @pytest.mark.parametrize("kind", [KeyKind.SYMMETRIC, KeyKind.X25519])
+    def test_non_ed25519_key_raises_wrong_key_type_error(
+            self,
+            keystore: FileKeyStore,
+            kind: KeyKind,
+    ) -> None:
+        key_id = keystore.generate_key(kind)
+
+        with pytest.raises(WrongKeyTypeError):
+            require_signing_key_matches_public_key(
+                keystore,
+                key_id,
+                b"p" * 32,
+            )
+
+    def test_uninitialized_keystore_raises_keystore_not_loaded_error(
+            self,
+            keystore_path,
+            protector: PasswordProtector,
+    ) -> None:
+        store = FileKeyStore(keystore_path, protector)
+
+        with pytest.raises(KeystoreNotLoadedError):
+            require_signing_key_matches_public_key(
+                store,
+                KeyIdHelpers.new_key_id(),
+                b"p" * 32,
+            )
+
+    @pytest.mark.parametrize(
+        "bad_public_key",
+        [
+            b"",
+            b"x" * 31,
+            b"x" * 33,
+            "x" * 32,
+            None,
+        ],
+    )
+    def test_invalid_public_key_shape_raises_invalid_input_error(
+            self,
+            keystore: FileKeyStore,
+            bad_public_key,
+    ) -> None:
+        key_id = keystore.generate_key(KeyKind.ED25519)
+
+        with pytest.raises(InvalidKeyError):
+            require_signing_key_matches_public_key(
+                keystore,
+                key_id,
+                bad_public_key,
+            )
 
 
 class TestSignWithKeySuccess:
@@ -75,9 +170,9 @@ class TestSignWithKeySuccess:
 
 class TestSignWithKeyKeystoreLifecycle:
     def test_uninitialized_keystore_raises_keystore_not_loaded_error(
-        self,
-        keystore_path,
-        protector: PasswordProtector,
+            self,
+            keystore_path,
+            protector: PasswordProtector,
     ) -> None:
         store = FileKeyStore(keystore_path, protector)
 
@@ -93,9 +188,9 @@ class TestSignWithKeyKeystoreLifecycle:
 class TestSignWithKeyWrongKeyKind:
     @pytest.mark.parametrize("kind", [KeyKind.SYMMETRIC, KeyKind.X25519])
     def test_non_ed25519_key_raises_wrong_key_type_error(
-        self,
-        keystore: FileKeyStore,
-        kind: KeyKind,
+            self,
+            keystore: FileKeyStore,
+            kind: KeyKind,
     ) -> None:
         key_id = keystore.generate_key(kind)
 
