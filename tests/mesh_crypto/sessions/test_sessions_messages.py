@@ -7,6 +7,7 @@ import pytest
 from mesh_crypto.core import (
     EncryptionKeyPair,
     EncryptionKeySerializer,
+    KeyIdHelpers,
     KeyKind,
     SigningKeySerializer,
 )
@@ -59,8 +60,8 @@ def generate_identity(store: FileKeyStore):
 
 @pytest.fixture
 def session_pair(
-        alice_keystore: FileKeyStore,
-        bob_keystore: FileKeyStore,
+    alice_keystore: FileKeyStore,
+    bob_keystore: FileKeyStore,
 ) -> tuple[SessionState, SessionState]:
     alice_identity_key_id, alice_public_key = generate_identity(alice_keystore)
     bob_identity_key_id, bob_public_key = generate_identity(bob_keystore)
@@ -95,10 +96,23 @@ def fresh_ratchet_public_key() -> bytes:
     return EncryptionKeySerializer.export_pair_public_key_raw(pair)
 
 
+def tamper_ciphertext(envelope: DirectMessageEnvelope) -> DirectMessageEnvelope:
+    ciphertext = envelope.aead.ciphertext
+    tampered_ciphertext = bytes([ciphertext[0] ^ 0x01]) + ciphertext[1:]
+
+    return replace(
+        envelope,
+        aead = replace(
+            envelope.aead,
+            ciphertext = tampered_ciphertext,
+        ),
+    )
+
+
 class TestBasicEncryptDecrypt:
     def test_alice_encrypts_and_bob_decrypts_one_message(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -127,8 +141,8 @@ class TestBasicEncryptDecrypt:
         assert bob_state.recv_counter == 0
 
     def test_encrypt_direct_message_does_not_mutate_old_state(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, _bob_state = session_pair
 
@@ -145,8 +159,8 @@ class TestBasicEncryptDecrypt:
         assert alice_state.send_counter == old_send_counter
 
     def test_decrypt_direct_message_does_not_mutate_old_state(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
         _next_alice_state, envelope = encrypt_direct_message(
@@ -170,8 +184,8 @@ class TestBasicEncryptDecrypt:
 
 class TestMultipleInOrderMessages:
     def test_multiple_messages_decrypt_in_order_and_advance_counters(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
         plaintexts = [b"message-0", b"message-1", b"message-2"]
@@ -195,7 +209,83 @@ class TestMultipleInOrderMessages:
 
 
 class TestDirectMessageAad:
-    def test_encrypt_decrypt_with_aad(self, session_pair: tuple[SessionState, SessionState]) -> None:
+    def test_encrypt_decrypt_both_with_aad_none_succeeds(
+        self,
+        session_pair: tuple[SessionState, SessionState],
+    ) -> None:
+        alice_state, bob_state = session_pair
+
+        _next_alice_state, envelope = encrypt_direct_message(
+            alice_state,
+            b"payload",
+            aad = None,
+        )
+        _next_bob_state, plaintext = decrypt_direct_message(
+            bob_state,
+            envelope,
+            aad = None,
+        )
+
+        assert plaintext == b"payload"
+
+    def test_encrypt_decrypt_both_with_empty_aad_succeeds(
+        self,
+        session_pair: tuple[SessionState, SessionState],
+    ) -> None:
+        alice_state, bob_state = session_pair
+
+        _next_alice_state, envelope = encrypt_direct_message(
+            alice_state,
+            b"payload",
+            aad = b"",
+        )
+        _next_bob_state, plaintext = decrypt_direct_message(
+            bob_state,
+            envelope,
+            aad = b"",
+        )
+
+        assert plaintext == b"payload"
+
+    def test_encrypt_with_aad_none_decrypt_with_empty_aad_fails(
+        self,
+        session_pair: tuple[SessionState, SessionState],
+    ) -> None:
+        alice_state, bob_state = session_pair
+
+        _next_alice_state, envelope = encrypt_direct_message(
+            alice_state,
+            b"payload",
+            aad = None,
+        )
+
+        with pytest.raises(AuthenticationError):
+            decrypt_direct_message(
+                bob_state,
+                envelope,
+                aad = b"",
+            )
+
+    def test_encrypt_with_empty_aad_decrypt_with_aad_none_fails(
+        self,
+        session_pair: tuple[SessionState, SessionState],
+    ) -> None:
+        alice_state, bob_state = session_pair
+
+        _next_alice_state, envelope = encrypt_direct_message(
+            alice_state,
+            b"payload",
+            aad = b"",
+        )
+
+        with pytest.raises(AuthenticationError):
+            decrypt_direct_message(
+                bob_state,
+                envelope,
+                aad = None,
+            )
+
+    def test_encrypt_decrypt_with_non_empty_aad(self, session_pair: tuple[SessionState, SessionState]) -> None:
         alice_state, bob_state = session_pair
 
         next_alice_state, envelope = encrypt_direct_message(
@@ -214,8 +304,8 @@ class TestDirectMessageAad:
         assert next_bob_state.recv_counter == 1
 
     def test_decrypt_with_different_aad_raises_authentication_error_and_state_remains_usable(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -242,8 +332,8 @@ class TestDirectMessageAad:
         assert next_bob_state.recv_counter == 1
 
     def test_decrypt_without_aad_fails_when_message_was_encrypted_with_aad(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -257,8 +347,8 @@ class TestDirectMessageAad:
             decrypt_direct_message(bob_state, envelope)
 
     def test_decrypt_with_aad_fails_when_message_was_encrypted_without_aad(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -277,8 +367,8 @@ class TestDirectMessageAad:
 
 class TestReplayDetection:
     def test_replaying_same_envelope_after_successful_decrypt_raises_replay_detected_error(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -303,8 +393,8 @@ class TestReplayDetection:
 
 class TestOutOfOrderMessages:
     def test_out_of_order_messages_within_limit_use_and_remove_skipped_keys(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -351,8 +441,8 @@ class TestOutOfOrderMessages:
             )
 
     def test_out_of_order_gap_beyond_limit_raises_skipped_key_limit_error(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -371,8 +461,8 @@ class TestOutOfOrderMessages:
 
 class TestForceRatchetMessages:
     def test_force_ratchet_message_updates_receiver_and_allows_response_ratchet(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -427,10 +517,124 @@ class TestForceRatchetMessages:
         assert alice_after_receive.recv_chain_key != alice_after_ratchet.recv_chain_key
 
 
+class TestFailedDecryptDoesNotCommitCandidateState:
+    def test_failed_decrypt_after_receive_ratchet_with_tampered_ciphertext_does_not_commit_state(
+        self,
+        session_pair: tuple[SessionState, SessionState],
+    ) -> None:
+        alice_state, bob_state = session_pair
+
+        _alice_after_ratchet, envelope = encrypt_direct_message(
+            alice_state,
+            b"ratchet candidate plaintext",
+            force_ratchet = True,
+        )
+        tampered = tamper_ciphertext(envelope)
+
+        old_remote_ratchet_public_key = bob_state.remote_ratchet_public_key
+        old_skipped_message_keys = bob_state.skipped_message_keys
+
+        with pytest.raises(AuthenticationError):
+            decrypt_direct_message(
+                bob_state,
+                tampered,
+            )
+
+        assert bob_state.remote_ratchet_public_key == old_remote_ratchet_public_key
+        assert bob_state.skipped_message_keys == old_skipped_message_keys
+
+        next_bob_state, plaintext = decrypt_direct_message(
+            bob_state,
+            envelope,
+        )
+
+        assert plaintext == b"ratchet candidate plaintext"
+        assert next_bob_state.remote_ratchet_public_key == envelope.ratchet_pub
+
+    def test_failed_decrypt_after_receive_ratchet_with_wrong_aad_does_not_commit_state(
+        self,
+        session_pair: tuple[SessionState, SessionState],
+    ) -> None:
+        alice_state, bob_state = session_pair
+
+        _alice_after_ratchet, envelope = encrypt_direct_message(
+            alice_state,
+            b"ratchet aad plaintext",
+            aad = b"correct aad",
+            force_ratchet = True,
+        )
+
+        old_remote_ratchet_public_key = bob_state.remote_ratchet_public_key
+        old_recv_counter = bob_state.recv_counter
+
+        with pytest.raises(AuthenticationError):
+            decrypt_direct_message(
+                bob_state,
+                envelope,
+                aad = b"wrong aad",
+            )
+
+        assert bob_state.remote_ratchet_public_key == old_remote_ratchet_public_key
+        assert bob_state.recv_counter == old_recv_counter
+
+        next_bob_state, plaintext = decrypt_direct_message(
+            bob_state,
+            envelope,
+            aad = b"correct aad",
+        )
+
+        assert plaintext == b"ratchet aad plaintext"
+        assert next_bob_state.remote_ratchet_public_key == envelope.ratchet_pub
+
+    def test_failed_future_message_decrypt_does_not_commit_skipped_keys(
+        self,
+        session_pair: tuple[SessionState, SessionState],
+    ) -> None:
+        alice_state, bob_state = session_pair
+
+        alice_state, envelope_0 = encrypt_direct_message(
+            alice_state,
+            b"zero",
+            aad = b"correct aad",
+        )
+        alice_state, _envelope_1 = encrypt_direct_message(
+            alice_state,
+            b"one",
+            aad = b"correct aad",
+        )
+        alice_state, envelope_2 = encrypt_direct_message(
+            alice_state,
+            b"two",
+            aad = b"correct aad",
+        )
+
+        assert bob_state.skipped_message_keys == ()
+
+        with pytest.raises(AuthenticationError):
+            decrypt_direct_message(
+                bob_state,
+                envelope_2,
+                aad = b"wrong aad",
+            )
+
+        assert bob_state.recv_counter == 0
+        assert bob_state.skipped_message_keys == ()
+
+        next_bob_state, plaintext_0 = decrypt_direct_message(
+            bob_state,
+            envelope_0,
+            aad = b"correct aad",
+        )
+
+        assert plaintext_0 == b"zero"
+        assert next_bob_state.recv_counter == 1
+        assert next_bob_state.skipped_message_keys == ()
+
+
 class TestInvalidEnvelopeAndBinding:
     def test_envelope_with_different_session_id_raises_invalid_session_state_error(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -440,7 +644,7 @@ class TestInvalidEnvelopeAndBinding:
         )
         wrong_session_envelope = replace(
             envelope,
-            session_id = SigningKeySerializerFallback.new_session_id(),
+            session_id = KeyIdHelpers.new_key_id(),
         )
 
         with pytest.raises(InvalidSessionStateError):
@@ -450,8 +654,8 @@ class TestInvalidEnvelopeAndBinding:
             )
 
     def test_tampered_counter_breaks_authentication(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -468,8 +672,8 @@ class TestInvalidEnvelopeAndBinding:
             )
 
     def test_tampered_previous_chain_length_breaks_authentication(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -489,8 +693,8 @@ class TestInvalidEnvelopeAndBinding:
             )
 
     def test_tampered_ratchet_pub_breaks_authentication(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -510,8 +714,8 @@ class TestInvalidEnvelopeAndBinding:
             )
 
     def test_invalid_envelope_object_raises_invalid_session_state_error(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         _alice_state, bob_state = session_pair
 
@@ -522,8 +726,8 @@ class TestInvalidEnvelopeAndBinding:
             )
 
     def test_authentication_failure_does_not_consume_receiver_state(
-            self,
-            session_pair: tuple[SessionState, SessionState],
+        self,
+        session_pair: tuple[SessionState, SessionState],
     ) -> None:
         alice_state, bob_state = session_pair
 
@@ -548,11 +752,3 @@ class TestInvalidEnvelopeAndBinding:
 
         assert plaintext == b"state remains usable after failure"
         assert next_bob_state.recv_counter == 1
-
-
-class SigningKeySerializerFallback:
-    @staticmethod
-    def new_session_id():
-        from mesh_crypto.core import KeyIdHelpers
-
-        return KeyIdHelpers.new_key_id()
