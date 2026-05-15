@@ -111,5 +111,12 @@ def require_signing_key_matches_public_key(keystore: FileKeyStore, key_id: KeyId
         field_name = "public_key",
     )
 
+    require_exact_length_bytes(
+        stored_public_key,
+        field_name = "stored_public_key",
+        length = 32,
+        error_cls = MalformedDataError,
+    )
+
     if stored_public_key != public_key:
         raise InvalidKeyError("identity public key does not match keystore signing key")
