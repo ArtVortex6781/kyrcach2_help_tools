@@ -2,23 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .core.key_types import KeyKind
 from .core.keys import EncryptionKeyPair, SigningKeyPair
+from .core.types import KeyId
 from .keystore.file_keystore import FileKeyStore
 from .keystore.protectors import Protector
-from .primitives.aead import decrypt, encrypt
-from .primitives.dh import derive_session_key
-from .primitives.signatures import sign, verify
 
 __all__ = [
     "generate_signing_key_pair",
     "generate_encryption_key_pair",
     "create_file_keystore",
     "open_file_keystore",
-    "sign",
-    "verify",
-    "encrypt",
-    "decrypt",
-    "derive_session_key",
+    "generate_keystore_key",
+    "generate_identity_key",
+    "generate_storage_key",
 ]
 
 
@@ -76,3 +73,35 @@ def open_file_keystore(path: str | Path, protector: Protector) -> FileKeyStore:
     keystore = FileKeyStore(path, protector)
     keystore.load()
     return keystore
+
+
+def generate_keystore_key(keystore: FileKeyStore,
+                          kind: KeyKind | str = KeyKind.SYMMETRIC) -> KeyId:
+    """
+    Generate a key inside FileKeyStore.
+
+    :param keystore: Loaded or newly created file keystore.
+    :param kind: Key kind to generate.
+    :return: Generated key identifier.
+    """
+    return keystore.generate_key(kind)
+
+
+def generate_identity_key(keystore: FileKeyStore) -> KeyId:
+    """
+    Generate an Ed25519 identity signing key inside FileKeyStore.
+
+    :param keystore: Loaded or newly created file keystore.
+    :return: Generated identity key identifier.
+    """
+    return keystore.generate_key(KeyKind.ED25519)
+
+
+def generate_storage_key(keystore: FileKeyStore) -> KeyId:
+    """
+    Generate a symmetric storage/data key inside FileKeyStore.
+
+    :param keystore: Loaded or newly created file keystore.
+    :return: Generated storage key identifier.
+    """
+    return keystore.generate_key(KeyKind.SYMMETRIC)

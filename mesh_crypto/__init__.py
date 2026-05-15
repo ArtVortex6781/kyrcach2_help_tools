@@ -1,46 +1,46 @@
 from __future__ import annotations
 
-from .core.keys import EncryptionKeyPair, SigningKeyPair
 from .core.key_types import KeyKind
+from .core.keys import EncryptionKeyPair, SigningKeyPair
 from .core.types import KeyId
 from .errors import (
     AuthenticationError,
+    HandshakeError,
     IntegrityError,
     InvalidInputError,
     InvalidKeyError,
+    InvalidSessionStateError,
     KeyMismatchError,
     KeyNotFoundError,
     KeystoreError,
     KeystoreNotLoadedError,
     MalformedDataError,
     MeshCryptoError,
+    OutOfOrderMessageError,
     ProtectorBackendUnavailableError,
     ProtectorError,
     ProtectorOperationError,
     ProtectorSecretNotFoundError,
+    RatchetError,
     ReplayDetectedError,
     RollbackDetectedError,
+    SessionCounterError,
+    SessionError,
     SignatureVerificationError,
+    SkippedKeyLimitError,
     UnsupportedFormatError,
     WrongKeyTypeError,
 )
 from .keystore.file_keystore import FileKeyStore
-from .keystore.protectors import KeyringProtector, PasswordProtector
-from .primitives.aead import decrypt, encrypt
-from .primitives.dh import derive_session_key
-from .primitives.signatures import sign, verify
+from .keystore.protectors import KeyringProtector, PasswordProtector, Protector
 
 __all__ = [
     "KeyId",
     "KeyKind",
     "SigningKeyPair",
     "EncryptionKeyPair",
-    "sign",
-    "verify",
-    "encrypt",
-    "decrypt",
-    "derive_session_key",
     "FileKeyStore",
+    "Protector",
     "PasswordProtector",
     "KeyringProtector",
     "MeshCryptoError",
@@ -62,4 +62,11 @@ __all__ = [
     "ProtectorSecretNotFoundError",
     "KeyNotFoundError",
     "KeystoreNotLoadedError",
+    "SessionError",
+    "HandshakeError",
+    "InvalidSessionStateError",
+    "SessionCounterError",
+    "OutOfOrderMessageError",
+    "SkippedKeyLimitError",
+    "RatchetError",
 ]
