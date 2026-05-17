@@ -11,6 +11,8 @@ __all__ = [
     "DatabaseExecutionError",
     "ConstraintError",
     "OperationalStorageError",
+    "EncryptedFieldError",
+    "StorageCryptoProviderError",
 ]
 
 
@@ -52,3 +54,11 @@ class ConstraintError(DatabaseExecutionError):
 
 class OperationalStorageError(DatabaseExecutionError):
     """Raised when a low-level operational database error occurs."""
+
+
+class StorageCryptoProviderError(NodeDBError):
+    """Raised when a configured storage crypto provider fails."""
+
+
+class EncryptedFieldError(NodeDBError):
+    """Raised when an encrypted database field cannot be processed safely."""
