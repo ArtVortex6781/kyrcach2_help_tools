@@ -68,14 +68,14 @@ def _validate_chat_like_fields(*, chat_id: str, chat_type: str, chat_name: str,
 
     :param chat_id: chat identifier
     :param chat_type: chat type string
-    :param chat_name: optional chat display name
+    :param chat_name: chat display name
     :param created_at: creation timestamp
     :param updated_at: last update timestamp
     :raises InvalidRecordError: if any invariant is violated
     """
     require_non_empty_str(chat_id, field_name = "chat_id")
     require_non_empty_str(chat_type, field_name = "chat_type")
-    require_optional_str(chat_name, field_name = "chat_name")
+    require_non_empty_str(chat_name, field_name = "chat_name")
     _validate_created_updated_timestamps(
         created_at = created_at,
         updated_at = updated_at,
@@ -118,7 +118,7 @@ class ChatRecord:
 
     chat_id: str
     chat_type: str
-    chat_name: str | None
+    chat_name: str
     created_at: int
     updated_at: int
 
@@ -232,7 +232,7 @@ class ChatWithParticipantCountRecord:
 
     chat_id: str
     chat_type: str
-    chat_name: str | None
+    chat_name: str
     created_at: int
     updated_at: int
     participant_count: int
