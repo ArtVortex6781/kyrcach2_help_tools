@@ -13,6 +13,7 @@ from .errors import (
     TransactionError,
     ConfigurationError
 )
+from .crypto_adapter import NodeDBCryptoAdapter
 
 __all__ = ["NodeDatabase"]
 
@@ -122,7 +123,7 @@ class _DatabaseExecutor:
 
 class NodeDatabase:
     """
-    Typed storage database engine for mesh_node_db Phase 3.
+    Typed storage database engine for mesh_node_db.
 
     Responsibilities:
     - own SQLite connection lifecycle
@@ -131,6 +132,7 @@ class NodeDatabase:
     - define grouped transaction boundaries
     - expose repository objects
     - centralize low-level DB execution through _DatabaseExecutor
+    - wire encrypted-at-rest storage through NodeDBCryptoAdapter
 
     Transaction model:
     - single write operations may be executed directly through repositories
@@ -181,7 +183,7 @@ class NodeDatabase:
         """
         CREATE TABLE IF NOT EXISTS attachments (
             attachment_hash TEXT PRIMARY KEY,
-            file_path BLOB NOT NULL
+            file_path TEXT NOT NULL
         )
         """,
         """
@@ -224,18 +226,23 @@ class NodeDatabase:
         """,
     )
 
-    def __init__(self, path: str, journal_mode: str = "WAL",
-                 synchronous: str = "NORMAL") -> None:
+    def __init__(self, path: str, *, crypto_adapter: NodeDBCryptoAdapter,
+                 journal_mode: str = "WAL", synchronous: str = "NORMAL") -> None:
         """
         Initialize database engine configuration.
 
         :param path: SQLite file path
+        :param crypto_adapter: storage crypto adapter used for encrypted-at-rest fields
         :param journal_mode: PRAGMA journal_mode value
         :param synchronous: PRAGMA synchronous value
         """
+        if crypto_adapter is None:
+            raise ConfigurationError("crypto_adapter must not be None.")
+
         self._path = path
         self._journal_mode = self._normalize_journal_mode(journal_mode)
         self._synchronous = self._normalize_synchronous(synchronous)
+        self._crypto_adapter = crypto_adapter
 
         self._conn: Optional[sqlite3.Connection] = None
         self._executor: Optional[_DatabaseExecutor] = None
@@ -311,7 +318,7 @@ class NodeDatabase:
         Bootstrap schema and validate schema version.
 
         For a new database:
-        - creates all Phase 3 tables and indexes
+        - creates all current mesh_node_db tables and indexes
         - inserts initial schema_version row
 
         For an existing database:
@@ -684,10 +691,19 @@ class NodeDatabase:
             PeerRepository,
         )
 
-        self.peers = PeerRepository(self._executor)
-        self.chats = ChatRepository(self._executor)
+        self.peers = PeerRepository(
+            self._executor,
+            crypto_adapter = self._crypto_adapter,
+        )
+        self.chats = ChatRepository(
+            self._executor,
+            crypto_adapter = self._crypto_adapter,
+        )
         self.chat_participants = ChatParticipantRepository(self._executor)
-        self.messages = MessageRepository(self._executor)
+        self.messages = MessageRepository(
+            self._executor,
+            crypto_adapter = self._crypto_adapter,
+        )
         self.attachments = AttachmentRepository(self._executor)
 
     def _reset_runtime_state(self) -> None:
