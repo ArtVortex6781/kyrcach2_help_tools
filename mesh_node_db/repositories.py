@@ -6,9 +6,10 @@ from typing import Optional
 from ._validation import (
     require_limit,
     require_non_empty_str,
+    require_non_negative_int,
     require_offset,
-    require_non_negative_int
 )
+from .crypto_adapter import NodeDBCryptoAdapter
 from .database import _DatabaseExecutor
 from .errors import InvalidRecordError, RecordNotFoundError
 from .tables import (
@@ -100,6 +101,17 @@ class BaseRepository:
 class PeerRepository(BaseRepository):
     """Repository for peer records."""
 
+    def __init__(self, executor: _DatabaseExecutor, *,
+                 crypto_adapter: NodeDBCryptoAdapter) -> None:
+        """
+        Initialize peer repository.
+
+        :param executor: internal database executor used for SQL operations
+        :param crypto_adapter: adapter for encrypted peer fields
+        """
+        super().__init__(executor)
+        self._crypto_adapter = crypto_adapter
+
     def add(self, record: PeerRecord) -> None:
         """
         Insert one peer record.
@@ -167,7 +179,10 @@ class PeerRepository(BaseRepository):
             WHERE peer_id = ?
             """,
             (
-                record.display_name,
+                self._crypto_adapter.encrypt_peer_display_name(
+                    record.peer_id,
+                    record.display_name,
+                ),
                 record.public_key,
                 record.updated_at,
                 record.peer_id,
@@ -188,8 +203,8 @@ class PeerRepository(BaseRepository):
         metadata remains available for message history. Existing chat
         memberships of this peer are removed separately.
 
-        This method must be called only inside NodeDatabase.run_in_transaction(...)
-        when used as part of peer removal workflow.
+        This method should be called inside NodeDatabase.run_in_transaction(...)
+        when used as part of a peer removal workflow.
 
         :param peer_id: logical peer identifier
         :param deleted_at: tombstone timestamp
@@ -293,8 +308,7 @@ class PeerRepository(BaseRepository):
         )
         return [self._row_to_record(row) for row in rows]
 
-    @staticmethod
-    def _params_from_record(record: PeerRecord) -> tuple:
+    def _params_from_record(self, record: PeerRecord) -> tuple:
         """
         Build SQL parameters from PeerRecord.
 
@@ -303,7 +317,10 @@ class PeerRepository(BaseRepository):
         """
         return (
             record.peer_id,
-            record.display_name,
+            self._crypto_adapter.encrypt_peer_display_name(
+                record.peer_id,
+                record.display_name,
+            ),
             record.public_key,
             record.created_at,
             record.updated_at,
@@ -311,17 +328,21 @@ class PeerRepository(BaseRepository):
             record.deleted_at,
         )
 
-    @staticmethod
-    def _row_to_record(row: sqlite3.Row) -> PeerRecord:
+    def _row_to_record(self, row: sqlite3.Row) -> PeerRecord:
         """
         Convert one SQLite row into PeerRecord.
 
         :param row: sqlite row to convert
         :return: PeerRecord
         """
+        peer_id = str(row["peer_id"])
+
         return PeerRecord(
-            peer_id = str(row["peer_id"]),
-            display_name = bytes(row["display_name"]),
+            peer_id = peer_id,
+            display_name = self._crypto_adapter.decrypt_peer_display_name(
+                peer_id,
+                bytes(row["display_name"]),
+            ),
             public_key = bytes(row["public_key"]),
             created_at = int(row["created_at"]),
             updated_at = int(row["updated_at"]),
@@ -334,6 +355,17 @@ class PeerRepository(BaseRepository):
 
 class ChatRepository(BaseRepository):
     """Repository for chat records."""
+
+    def __init__(self, executor: _DatabaseExecutor, *,
+                 crypto_adapter: NodeDBCryptoAdapter) -> None:
+        """
+        Initialize chat repository.
+
+        :param executor: internal database executor used for SQL operations
+        :param crypto_adapter: adapter for encrypted chat fields
+        """
+        super().__init__(executor)
+        self._crypto_adapter = crypto_adapter
 
     def add(self, record: ChatRecord) -> None:
         """
@@ -379,7 +411,10 @@ class ChatRepository(BaseRepository):
 
     def update(self, record: ChatRecord) -> None:
         """
-        Update one chat record.
+        Update mutable chat fields.
+
+        This method intentionally does not modify immutable storage facts such
+        as chat_type or created_at.
 
         :param record: chat record with updated values
         :raises RecordNotFoundError: if the chat does not exist.
@@ -392,7 +427,10 @@ class ChatRepository(BaseRepository):
             WHERE chat_id = ?
             """,
             (
-                record.chat_name,
+                self._crypto_adapter.encrypt_chat_name(
+                    record.chat_id,
+                    record.chat_name,
+                ),
                 record.updated_at,
                 record.chat_id,
             ),
@@ -406,8 +444,11 @@ class ChatRepository(BaseRepository):
 
     def delete(self, chat_id: str) -> None:
         """
-       Cascade deletion of a chat with the corresponding ID,
-       i.e., all messages in it and all its participants are deleted
+        Delete one chat by chat_id.
+
+        This is a destructive storage operation. Due to foreign-key cascade
+        behavior, deleting a chat also removes dependent records such as
+        participants and messages linked to that chat.
 
         :param chat_id: logical chat identifier
         :raises InvalidRecordError: if chat_id is invalid.
@@ -515,8 +556,7 @@ class ChatRepository(BaseRepository):
         )
         return [self._row_to_count_record(row) for row in rows]
 
-    @staticmethod
-    def _params_from_record(record: ChatRecord) -> tuple:
+    def _params_from_record(self, record: ChatRecord) -> tuple:
         """
         Build SQL parameters from ChatRecord.
 
@@ -526,39 +566,50 @@ class ChatRepository(BaseRepository):
         return (
             record.chat_id,
             record.chat_type,
-            record.chat_name,
+            self._crypto_adapter.encrypt_chat_name(
+                record.chat_id,
+                record.chat_name,
+            ),
             record.created_at,
             record.updated_at,
         )
 
-    @staticmethod
-    def _row_to_record(row: sqlite3.Row) -> ChatRecord:
+    def _row_to_record(self, row: sqlite3.Row) -> ChatRecord:
         """
         Convert one SQLite row into ChatRecord.
 
         :param row: sqlite row to convert
         :return: ChatRecord
         """
+        chat_id = str(row["chat_id"])
+
         return ChatRecord(
-            chat_id = str(row["chat_id"]),
+            chat_id = chat_id,
             chat_type = str(row["chat_type"]),
-            chat_name = bytes(row["chat_name"]),
+            chat_name = self._crypto_adapter.decrypt_chat_name(
+                chat_id,
+                bytes(row["chat_name"]),
+            ),
             created_at = int(row["created_at"]),
             updated_at = int(row["updated_at"]),
         )
 
-    @staticmethod
-    def _row_to_count_record(row: sqlite3.Row) -> ChatWithParticipantCountRecord:
+    def _row_to_count_record(self, row: sqlite3.Row) -> ChatWithParticipantCountRecord:
         """
         Convert one SQLite row into ChatWithParticipantCountRecord.
 
         :param row: sqlite row to convert
         :return: ChatWithParticipantCountRecord
         """
+        chat_id = str(row["chat_id"])
+
         return ChatWithParticipantCountRecord(
-            chat_id = str(row["chat_id"]),
+            chat_id = chat_id,
             chat_type = str(row["chat_type"]),
-            chat_name = bytes(row["chat_name"]),
+            chat_name = self._crypto_adapter.decrypt_chat_name(
+                chat_id,
+                bytes(row["chat_name"]),
+            ),
             created_at = int(row["created_at"]),
             updated_at = int(row["updated_at"]),
             participant_count = int(row["participant_count"]),
@@ -712,6 +763,17 @@ class ChatParticipantRepository(BaseRepository):
 class MessageRepository(BaseRepository):
     """Repository for message records."""
 
+    def __init__(self, executor: _DatabaseExecutor, *,
+                 crypto_adapter: NodeDBCryptoAdapter) -> None:
+        """
+        Initialize message repository.
+
+        :param executor: internal database executor used for SQL operations
+        :param crypto_adapter: adapter for encrypted message fields
+        """
+        super().__init__(executor)
+        self._crypto_adapter = crypto_adapter
+
     def add(self, record: MessageRecord) -> None:
         """
         Insert one message record.
@@ -780,7 +842,10 @@ class MessageRepository(BaseRepository):
             """,
             (
                 record.updated_at,
-                record.payload,
+                self._crypto_adapter.encrypt_message_payload(
+                    record.message_id,
+                    record.payload,
+                ),
                 record.attachment_hash,
                 record.message_id,
             ),
@@ -1068,8 +1133,7 @@ class MessageRepository(BaseRepository):
             "Pagination requires both before_created_at and before_message_id, or neither."
         )
 
-    @staticmethod
-    def _params_from_record(record: MessageRecord) -> tuple:
+    def _params_from_record(self, record: MessageRecord) -> tuple:
         """
         Build SQL parameters from MessageRecord.
 
@@ -1082,46 +1146,61 @@ class MessageRepository(BaseRepository):
             record.sender_id,
             record.created_at,
             record.updated_at,
-            record.payload,
+            self._crypto_adapter.encrypt_message_payload(
+                record.message_id,
+                record.payload,
+            ),
             record.attachment_hash,
         )
 
-    @staticmethod
-    def _row_to_record(row: sqlite3.Row) -> MessageRecord:
+    def _row_to_record(self, row: sqlite3.Row) -> MessageRecord:
         """
         Convert one SQLite row into MessageRecord.
 
         :param row: sqlite row to convert
         :return: MessageRecord
         """
+        message_id = str(row["message_id"])
+
         return MessageRecord(
-            message_id = str(row["message_id"]),
+            message_id = message_id,
             chat_id = str(row["chat_id"]),
             sender_id = str(row["sender_id"]),
             created_at = int(row["created_at"]),
             updated_at = int(row["updated_at"]),
-            payload = bytes(row["payload"]),
+            payload = self._crypto_adapter.decrypt_message_payload(
+                message_id,
+                bytes(row["payload"]),
+            ),
             attachment_hash = (
                 None if row["attachment_hash"] is None else str(row["attachment_hash"])
             ),
         )
 
-    @staticmethod
-    def _row_to_sender_record(row: sqlite3.Row) -> ChatMessageWithSenderRecord:
+    def _row_to_sender_record(self, row: sqlite3.Row) -> ChatMessageWithSenderRecord:
         """
         Convert one SQLite row into ChatMessageWithSenderRecord.
 
         :param row: sqlite row to convert
         :return: ChatMessageWithSenderRecord
         """
+        message_id = str(row["message_id"])
+        sender_id = str(row["sender_id"])
+
         return ChatMessageWithSenderRecord(
-            message_id = str(row["message_id"]),
+            message_id = message_id,
             chat_id = str(row["chat_id"]),
-            sender_id = str(row["sender_id"]),
-            sender_display_name = bytes(row["sender_display_name"]),
+            sender_id = sender_id,
+            sender_display_name = self._crypto_adapter.decrypt_peer_display_name(
+                sender_id,
+                bytes(row["sender_display_name"]),
+            ),
             created_at = int(row["created_at"]),
             updated_at = int(row["updated_at"]),
-            payload = bytes(row["payload"]),
+            payload = self._crypto_adapter.decrypt_message_payload(
+                message_id,
+                bytes(row["payload"]),
+            ),
             attachment_hash = (
                 None if row["attachment_hash"] is None else str(row["attachment_hash"])
             ),
@@ -1174,6 +1253,9 @@ class AttachmentRepository(BaseRepository):
         """
         Delete one attachment by attachment_hash.
 
+        Deleting an attachment keeps related messages and sets
+        messages.attachment_hash to NULL according to schema FK policy.
+
         :param attachment_hash: logical attachment identifier
         :raises InvalidRecordError: if attachment_hash is invalid.
         :raises RecordNotFoundError: if the attachment does not exist.
@@ -1214,5 +1296,5 @@ class AttachmentRepository(BaseRepository):
         """
         return AttachmentRecord(
             attachment_hash = str(row["attachment_hash"]),
-            file_path = bytes(row["file_path"]),
+            file_path = str(row["file_path"]),
         )
