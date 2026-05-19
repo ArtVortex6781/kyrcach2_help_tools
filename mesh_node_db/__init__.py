@@ -1,15 +1,25 @@
+from .crypto_adapter import (
+    CallableStorageCryptoProvider,
+    NodeDBCryptoAdapter,
+    StorageCryptoProvider,
+)
 from .database import NodeDatabase
 from .errors import (
+    ConfigurationError,
     ConstraintError,
+    DatabaseConfigurationError,
     DatabaseExecutionError,
+    EncryptedFieldConfigurationError,
+    EncryptedFieldError,
     InvalidRecordError,
     MigrationError,
     NodeDBError,
     OperationalStorageError,
     RecordNotFoundError,
     SchemaError,
+    StorageCryptoConfigurationError,
+    StorageCryptoProviderError,
     TransactionError,
-    ConfigurationError
 )
 from .tables import (
     AttachmentRecord,
@@ -24,15 +34,20 @@ from .tables import (
 __all__ = [
     "NodeDatabase",
     "NodeDBError",
+    "ConfigurationError",
+    "DatabaseConfigurationError",
+    "StorageCryptoConfigurationError",
+    "EncryptedFieldConfigurationError",
     "InvalidRecordError",
     "RecordNotFoundError",
-    "ConfigurationError",
     "SchemaError",
     "MigrationError",
     "TransactionError",
     "DatabaseExecutionError",
     "ConstraintError",
     "OperationalStorageError",
+    "StorageCryptoProviderError",
+    "EncryptedFieldError",
     "PeerRecord",
     "ChatRecord",
     "ChatParticipantRecord",
@@ -42,4 +57,4 @@ __all__ = [
     "ChatWithParticipantCountRecord",
 ]
 
-__version__ = "0.3.5"
+__version__ = "0.5.0"
