@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+import uuid
+
 import pytest
 
 from mesh_node_db import (
@@ -9,9 +12,21 @@ from mesh_node_db import (
     InvalidRecordError,
     MessageRecord,
     NodeDatabase,
+    NodeDBCryptoAdapter,
     PeerRecord,
     RecordNotFoundError,
 )
+
+
+class EchoStorageProvider:
+    def encrypt_field(self, plaintext: bytes, *, aad: bytes, key_id) -> bytes:
+        return b"encrypted:" + plaintext
+
+    def decrypt_field(self, envelope: bytes, *, aad: bytes) -> bytes:
+        prefix = b"encrypted:"
+        if envelope.startswith(prefix):
+            return envelope[len(prefix):]
+        return envelope
 
 
 @pytest.fixture
@@ -20,16 +35,36 @@ def db_path(tmp_path):
 
 
 @pytest.fixture
-def db(db_path) -> NodeDatabase:
-    database = NodeDatabase(str(db_path))
+def crypto_adapter() -> NodeDBCryptoAdapter:
+    return NodeDBCryptoAdapter(
+        provider = EchoStorageProvider(),
+        active_storage_key_id = uuid.uuid4(),
+    )
+
+
+@pytest.fixture
+def db(db_path, crypto_adapter: NodeDBCryptoAdapter) -> NodeDatabase:
+    database = NodeDatabase(str(db_path), crypto_adapter = crypto_adapter)
     database.open()
     database.initialize()
     return database
 
 
+def fetch_raw_value(db_path, table_name: str, column_name: str, key_column: str, key_value: str):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            f"SELECT {column_name} FROM {table_name} WHERE {key_column} = ?",
+            (key_value,),
+        ).fetchone()
+        return None if row is None else row[0]
+    finally:
+        conn.close()
+
+
 def make_peer(
         peer_id: str,
-        display_name: bytes = b"Alice",
+        display_name: str = "Alice",
         public_key: bytes = b"alice-pk",
         created_at: int = 100,
         updated_at: int = 100,
@@ -50,7 +85,7 @@ def make_peer(
 def make_chat(
         chat_id: str,
         chat_type: str = "group",
-        chat_name: bytes = b"Group chat",
+        chat_name: str = "Group chat",
         created_at: int = 200,
         updated_at: int = 200,
 ) -> ChatRecord:
@@ -77,7 +112,7 @@ def make_participant(
 
 def make_attachment(
         attachment_hash: str,
-        file_path: bytes = b"/tmp/file.bin",
+        file_path: str = "/tmp/file.bin",
 ) -> AttachmentRecord:
     return AttachmentRecord(
         attachment_hash = attachment_hash,
@@ -90,7 +125,7 @@ def make_message(
         chat_id: str,
         sender_id: str,
         created_at: int = 100,
-        updated_at: int = 200,
+        updated_at: int | None = 200,
         payload: bytes = b"payload",
         attachment_hash: str | None = None,
 ) -> MessageRecord:
@@ -107,33 +142,57 @@ def make_message(
 
 
 class TestPeerRepository:
-    def test_add_read_update_list_active_and_list_deleted(self, db: NodeDatabase) -> None:
-        first = make_peer("peer-1", b"Alice", b"pk-1", 100, 101)
-        second = make_peer("peer-2", b"Bob", b"pk-2", 200, 201)
+    def test_add_read_update_list_active_and_list_deleted(
+            self,
+            db: NodeDatabase,
+            db_path,
+    ) -> None:
+        first = make_peer("peer-1", "Alice", b"pk-1", 100, 101)
+        second = make_peer("peer-2", "Bob", b"pk-2", 200, 201)
 
         db.peers.add(first)
         db.peers.add(second)
 
+        raw_first_display_name = fetch_raw_value(
+            db_path,
+            "peers",
+            "display_name",
+            "peer_id",
+            "peer-1",
+        )
+
+        assert raw_first_display_name == b"encrypted:Alice"
+        assert raw_first_display_name != b"Alice"
         assert db.peers.read("peer-1") == first
         assert db.peers.read("peer-2") == second
         assert db.peers.list_active() == [first, second]
         assert db.peers.list_deleted() == []
 
-        updated = make_peer("peer-1", b"Alice Updated", b"pk-1-new", 100, 150)
+        updated = make_peer("peer-1", "Alice Updated", b"pk-1-new", 100, 150)
         db.peers.update(updated)
 
         restored = db.peers.read("peer-1")
+        raw_updated_display_name = fetch_raw_value(
+            db_path,
+            "peers",
+            "display_name",
+            "peer_id",
+            "peer-1",
+        )
+
         assert restored == updated
+        assert raw_updated_display_name == b"encrypted:Alice Updated"
+        assert raw_updated_display_name != raw_first_display_name
         assert db.peers.list_active() == [updated, second]
 
     def test_update_does_not_change_created_at(self, db: NodeDatabase) -> None:
-        original = make_peer("peer-1", b"Alice", b"pk-1", 100, 110)
+        original = make_peer("peer-1", "Alice", b"pk-1", 100, 110)
         db.peers.add(original)
 
         db.peers.update(
             make_peer(
                 "peer-1",
-                b"Alice Updated",
+                "Alice Updated",
                 b"pk-1-new",
                 created_at = 300,
                 updated_at = 400,
@@ -144,16 +203,16 @@ class TestPeerRepository:
         assert restored is not None
         assert restored.created_at == 100
         assert restored.updated_at == 400
-        assert restored.display_name == b"Alice Updated"
+        assert restored.display_name == "Alice Updated"
         assert restored.public_key == b"pk-1-new"
 
     def test_soft_delete_marks_peer_deleted_removes_memberships_and_keeps_messages(
             self,
             db: NodeDatabase,
     ) -> None:
-        peer = make_peer("peer-1", b"Alice", b"pk-1", 100, 100)
-        other_peer = make_peer("peer-2", b"Bob", b"pk-2", 110, 110)
-        chat = make_chat("chat-1", "group", b"Group", 200, 200)
+        peer = make_peer("peer-1", "Alice", b"pk-1", 100, 100)
+        other_peer = make_peer("peer-2", "Bob", b"pk-2", 110, 110)
+        chat = make_chat("chat-1", "group", "Group", 200, 200)
         participant = make_participant("chat-1", "peer-1", 300)
         message = make_message("msg-1", "chat-1", "peer-1", 100, 200, b"hello")
 
@@ -190,32 +249,56 @@ class TestPeerRepository:
 
 
 class TestChatRepository:
-    def test_add_read_update_list_all_and_list_by_type(self, db: NodeDatabase) -> None:
-        first = make_chat("chat-1", "direct", b"Direct", 100, 101)
-        second = make_chat("chat-2", "group", b"Group", 200, 201)
-        third = make_chat("chat-3", "group", b"Group 2", 300, 301)
+    def test_add_read_update_list_all_and_list_by_type(
+            self,
+            db: NodeDatabase,
+            db_path,
+    ) -> None:
+        first = make_chat("chat-1", "direct", "Direct", 100, 101)
+        second = make_chat("chat-2", "group", "Group", 200, 201)
+        third = make_chat("chat-3", "group", "Group 2", 300, 301)
 
         db.chats.add(first)
         db.chats.add(second)
         db.chats.add(third)
 
+        raw_second_chat_name = fetch_raw_value(
+            db_path,
+            "chats",
+            "chat_name",
+            "chat_id",
+            "chat-2",
+        )
+
+        assert raw_second_chat_name == b"encrypted:Group"
+        assert raw_second_chat_name != b"Group"
         assert db.chats.read("chat-1") == first
         assert db.chats.read("chat-2") == second
         assert db.chats.list_all() == [first, second, third]
         assert db.chats.list_by_type("group") == [second, third]
 
-        db.chats.update(make_chat("chat-2", "other-type", b"Group Updated", 240, 250))
+        db.chats.update(make_chat("chat-2", "other-type", "Group Updated", 240, 250))
 
         restored = db.chats.read("chat-2")
+        raw_updated_chat_name = fetch_raw_value(
+            db_path,
+            "chats",
+            "chat_name",
+            "chat_id",
+            "chat-2",
+        )
+
         assert restored is not None
         assert restored.chat_id == "chat-2"
         assert restored.chat_type == "group"
-        assert restored.chat_name == b"Group Updated"
+        assert restored.chat_name == "Group Updated"
         assert restored.created_at == 200
         assert restored.updated_at == 250
+        assert raw_updated_chat_name == b"encrypted:Group Updated"
+        assert raw_updated_chat_name != raw_second_chat_name
 
     def test_delete_removes_chat(self, db: NodeDatabase) -> None:
-        chat = make_chat("chat-1", "group", b"Group", 100, 100)
+        chat = make_chat("chat-1", "group", "Group", 100, 100)
         db.chats.add(chat)
 
         db.chats.delete("chat-1")
@@ -236,8 +319,8 @@ class TestChatRepository:
 
 class TestChatParticipantRepository:
     def test_add_read_delete_list_by_chat_and_list_by_peer(self, db: NodeDatabase) -> None:
-        db.peers.add(make_peer("peer-1", b"Alice"))
-        db.peers.add(make_peer("peer-2", b"Bob"))
+        db.peers.add(make_peer("peer-1", "Alice"))
+        db.peers.add(make_peer("peer-2", "Bob"))
         db.chats.add(make_chat("chat-1", "group"))
         db.chats.add(make_chat("chat-2", "group"))
 
@@ -268,11 +351,20 @@ class TestChatParticipantRepository:
 
 
 class TestAttachmentRepository:
-    def test_add_read_and_delete(self, db: NodeDatabase) -> None:
-        attachment = make_attachment("hash-1", b"/tmp/a.bin")
+    def test_add_read_and_delete(self, db: NodeDatabase, db_path) -> None:
+        attachment = make_attachment("hash-1", "/tmp/a.bin")
 
         db.attachments.add(attachment)
 
+        raw_file_path = fetch_raw_value(
+            db_path,
+            "attachments",
+            "file_path",
+            "attachment_hash",
+            "hash-1",
+        )
+
+        assert raw_file_path == "/tmp/a.bin"
         assert db.attachments.read("hash-1") == attachment
 
         db.attachments.delete("hash-1")
@@ -288,11 +380,11 @@ class TestAttachmentRepository:
 
 
 class TestMessageRepository:
-    def test_add_read_update_delete(self, db: NodeDatabase) -> None:
-        db.peers.add(make_peer("peer-1", b"Alice"))
+    def test_add_read_update_delete(self, db: NodeDatabase, db_path) -> None:
+        db.peers.add(make_peer("peer-1", "Alice"))
         db.chats.add(make_chat("chat-1", "group"))
-        db.attachments.add(make_attachment("hash-1", b"/tmp/a.bin"))
-        db.attachments.add(make_attachment("hash-2", b"/tmp/b.bin"))
+        db.attachments.add(make_attachment("hash-1", "/tmp/a.bin"))
+        db.attachments.add(make_attachment("hash-2", "/tmp/b.bin"))
 
         original = make_message(
             "msg-1",
@@ -305,6 +397,16 @@ class TestMessageRepository:
         )
         db.messages.add(original)
 
+        raw_original_payload = fetch_raw_value(
+            db_path,
+            "messages",
+            "payload",
+            "message_id",
+            "msg-1",
+        )
+
+        assert raw_original_payload == b"encrypted:hello"
+        assert raw_original_payload != b"hello"
         assert db.messages.read("msg-1") == original
 
         updated = make_message(
@@ -319,6 +421,14 @@ class TestMessageRepository:
         db.messages.update(updated)
 
         restored = db.messages.read("msg-1")
+        raw_updated_payload = fetch_raw_value(
+            db_path,
+            "messages",
+            "payload",
+            "message_id",
+            "msg-1",
+        )
+
         assert restored is not None
         assert restored.message_id == "msg-1"
         assert restored.chat_id == "chat-1"
@@ -327,14 +437,16 @@ class TestMessageRepository:
         assert restored.updated_at == 700
         assert restored.payload == b"updated payload"
         assert restored.attachment_hash == "hash-2"
+        assert raw_updated_payload == b"encrypted:updated payload"
+        assert raw_updated_payload != raw_original_payload
 
         db.messages.delete("msg-1")
 
         assert db.messages.read("msg-1") is None
 
     def test_list_by_sender(self, db: NodeDatabase) -> None:
-        db.peers.add(make_peer("peer-1", b"Alice"))
-        db.peers.add(make_peer("peer-2", b"Bob"))
+        db.peers.add(make_peer("peer-1", "Alice"))
+        db.peers.add(make_peer("peer-2", "Bob"))
         db.chats.add(make_chat("chat-1", "group"))
 
         first = make_message(
