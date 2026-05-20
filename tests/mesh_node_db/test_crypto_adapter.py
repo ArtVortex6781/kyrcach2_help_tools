@@ -73,17 +73,31 @@ class InvalidUtf8Provider:
 
 
 class TestBuildStorageFieldAAD:
+    @staticmethod
+    def frame(value: bytes) -> bytes:
+        return len(value).to_bytes(4, "big") + value
+
     def test_build_storage_field_aad_is_stable(self) -> None:
         first = build_storage_field_aad("peers", "display_name", "peer-1")
         second = build_storage_field_aad("peers", "display_name", "peer-1")
 
         assert first == second
-        assert first == b"mesh_node_db:v1:peers:display_name:peer-1"
+        assert first == (
+                self.frame(b"mesh_node_db:v1")
+                + self.frame(b"peers")
+                + self.frame(b"display_name")
+                + self.frame(b"peer-1")
+        )
 
     def test_build_storage_field_aad_accepts_bytes_record_id(self) -> None:
         aad = build_storage_field_aad("messages", "payload", b"msg-1")
 
-        assert aad == b"mesh_node_db:v1:messages:payload:msg-1"
+        assert aad == (
+                self.frame(b"mesh_node_db:v1")
+                + self.frame(b"messages")
+                + self.frame(b"payload")
+                + self.frame(b"msg-1")
+        )
 
     def test_build_storage_field_aad_differs_by_table(self) -> None:
         peer_aad = build_storage_field_aad("peers", "display_name", "record-1")
@@ -102,6 +116,21 @@ class TestBuildStorageFieldAAD:
         second = build_storage_field_aad("messages", "payload", "msg-2")
 
         assert first != second
+
+    def test_framing_prevents_ambiguous_aad_composition(self) -> None:
+        first = build_storage_field_aad("peers", "display_name", "ab")
+        second = build_storage_field_aad("peers", "display_name", "a" + "b")
+
+        assert first == second
+
+        different_table_field_split = (
+                self.frame(b"mesh_node_db:v1")
+                + self.frame(b"peer")
+                + self.frame(b"sdisplay_name")
+                + self.frame(b"ab")
+        )
+
+        assert first != different_table_field_split
 
     @pytest.mark.parametrize(
         ("table", "field"),
