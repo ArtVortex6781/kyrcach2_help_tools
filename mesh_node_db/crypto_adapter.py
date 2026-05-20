@@ -64,7 +64,7 @@ class StorageCryptoProvider(Protocol):
         ...
 
 
-class CallableStorageCryptoProvider:
+class CallableStorageCryptoProvider(StorageCryptoProvider):
     """
     StorageCryptoProvider implementation backed by external callables.
 
