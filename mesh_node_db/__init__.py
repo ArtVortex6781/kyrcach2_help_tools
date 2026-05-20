@@ -55,6 +55,9 @@ __all__ = [
     "AttachmentRecord",
     "ChatMessageWithSenderRecord",
     "ChatWithParticipantCountRecord",
+    "CallableStorageCryptoProvider",
+    "NodeDBCryptoAdapter",
+    "StorageCryptoProvider"
 ]
 
 __version__ = "0.5.0"
