@@ -373,6 +373,7 @@ class NodeDatabase:
             )
 
         self._validate_schema_shape()
+        self._validate_column_storage_types()
         self._validate_foreign_keys()
         self._validate_required_indexes()
         self._initialized = True
@@ -710,6 +711,47 @@ class NodeDatabase:
         missing = expected_indexes - actual_indexes
         if missing:
             raise SchemaError(f"Missing required indexes: {sorted(missing)}")
+
+    def _validate_column_storage_types(self) -> None:
+        """
+        Validate declared SQLite storage types for Phase 5 storage boundary.
+
+        This check intentionally covers only fields where the declared physical
+        SQLite type is part of the encrypted-at-rest contract.
+
+        :raises DatabaseExecutorUnavailableError: if the internal executor is not available.
+        :raises SchemaError: if a critical column has an unexpected declared type.
+        """
+        self._require_executor()
+
+        expected_types = {
+            ("peers", "display_name"): "BLOB",
+            ("chats", "chat_name"): "BLOB",
+            ("messages", "payload"): "BLOB",
+            ("attachments", "file_path"): "TEXT",
+        }
+
+        for (table_name, column_name), expected_type in expected_types.items():
+            try:
+                rows = self._executor.fetchall(f"PRAGMA table_info({table_name})")
+            except NodeDBError as exc:
+                raise SchemaError(
+                    f"Failed to inspect declared column types for table "
+                    f"{table_name!r}: {exc}"
+                ) from exc
+
+            actual_types = {
+                str(row["name"]): str(row["type"]).strip().upper()
+                for row in rows
+            }
+
+            actual_type = actual_types.get(column_name)
+
+            if actual_type != expected_type:
+                raise SchemaError(
+                    f"Column {table_name}.{column_name} has invalid declared type: "
+                    f"{actual_type!r}. Expected: {expected_type!r}."
+                )
 
     def _wire_repositories(self) -> None:
         """
