@@ -6,12 +6,15 @@ from typing import Callable, Optional, TypeVar, Iterator, TYPE_CHECKING
 
 from .errors import (
     ConstraintError,
+    DatabaseConfigurationError,
     DatabaseExecutionError,
+    DatabaseExecutorUnavailableError,
+    DatabaseNotInitializedError,
+    DatabaseNotOpenError,
     NodeDBError,
     OperationalStorageError,
     SchemaError,
     TransactionError,
-    ConfigurationError
 )
 from .crypto_adapter import NodeDBCryptoAdapter
 
@@ -236,8 +239,15 @@ class NodeDatabase:
         :param journal_mode: PRAGMA journal_mode value
         :param synchronous: PRAGMA synchronous value
         """
-        if crypto_adapter is None:
-            raise ConfigurationError("crypto_adapter must not be None.")
+        if not isinstance(path, str):
+            raise DatabaseConfigurationError("path must be str.")
+        if path == "":
+            raise DatabaseConfigurationError("path must not be empty.")
+
+        if not isinstance(crypto_adapter, NodeDBCryptoAdapter):
+            raise DatabaseConfigurationError(
+                "crypto_adapter must be NodeDBCryptoAdapter."
+            )
 
         self._path = path
         self._journal_mode = self._normalize_journal_mode(journal_mode)
@@ -269,7 +279,8 @@ class NodeDatabase:
         Repeated calls are allowed and must remain stable.
 
         :param timeout: SQLite connection timeout in seconds
-        :raises NodeDBError: if database open or connection configuration fails.
+        :raises OperationalStorageError: if database open or connection configuration fails.
+        :raises DatabaseExecutorUnavailableError: if repository wiring cannot access executor.
         """
         if self._conn is not None:
             return
@@ -290,7 +301,7 @@ class NodeDatabase:
             raise
         except sqlite3.Error as exc:
             self._reset_runtime_state()
-            raise NodeDBError(f"Failed to open database: {exc}") from exc
+            raise OperationalStorageError(f"Failed to open database: {exc}") from exc
         except Exception:
             self._reset_runtime_state()
             raise
@@ -301,7 +312,7 @@ class NodeDatabase:
 
         Repeated calls are allowed and must remain stable.
 
-        :raises NodeDBError: if connection close fails.
+        :raises OperationalStorageError: if connection close fails.
         """
         if self._conn is None:
             return
@@ -309,7 +320,7 @@ class NodeDatabase:
         try:
             self._conn.close()
         except sqlite3.Error as exc:
-            raise NodeDBError(f"Failed to close database: {exc}") from exc
+            raise OperationalStorageError(f"Failed to close database: {exc}") from exc
         finally:
             self._reset_runtime_state()
 
@@ -327,7 +338,8 @@ class NodeDatabase:
         Repeated calls are allowed and must remain stable.
 
         :raises SchemaError: if schema bootstrap fails or schema version is unsupported.
-        :raises NodeDBError: if the database is not open.
+        :raises DatabaseNotOpenError: if the database connection is not open.
+        :raises DatabaseExecutorUnavailableError: if the internal executor is not available.
         """
         self._require_open()
         self._require_executor()
@@ -370,7 +382,9 @@ class NodeDatabase:
         Return current schema version stored in the database.
 
         :return: current schema version
-        :raises NodeDBError: if the database is not open or not initialized.
+        :raises DatabaseNotOpenError: if the database connection is not open.
+        :raises DatabaseExecutorUnavailableError: if the internal executor is not available.
+        :raises DatabaseNotInitializedError: if initialize() has not been called.
         :raises SchemaError: if schema_version row is missing.
         """
         self._require_initialized()
@@ -397,6 +411,9 @@ class NodeDatabase:
 
         :param fn: callback executed inside one SQL transaction
         :return: callback return value
+        :raises DatabaseNotOpenError: if the database connection is not open.
+        :raises DatabaseExecutorUnavailableError: if the internal executor is not available.
+        :raises DatabaseNotInitializedError: if initialize() has not been called.
         :raises TransactionError: if the grouped transaction fails.
         """
         self._require_initialized()
@@ -421,6 +438,7 @@ class NodeDatabase:
 
         Nested transactions are not supported in this phase and fail fast.
 
+        :raises DatabaseNotOpenError: if the database connection is not open.
         :raises TransactionError: if SQL transaction handling fails.
         """
         self._require_open()
@@ -459,31 +477,35 @@ class NodeDatabase:
         """
         Ensure that the SQLite connection is open.
 
-        :raises NodeDBError: if the connection is not open.
+        :raises DatabaseNotOpenError: if the connection is not open.
         """
         if self._conn is None:
-            raise NodeDBError("Database connection is not open.")
+            raise DatabaseNotOpenError("Database connection is not open.")
 
     def _require_executor(self) -> None:
         """
         Ensure that the internal database executor is available.
 
-        :raises NodeDBError: if executor wiring has not been completed.
+        :raises DatabaseExecutorUnavailableError: if executor wiring has not been completed.
         """
         if self._executor is None:
-            raise NodeDBError("Database executor is not available.")
+            raise DatabaseExecutorUnavailableError("Database executor is not available.")
 
     def _require_initialized(self) -> None:
         """
         Ensure that the database is open and schema has been initialized.
 
-        :raises NodeDBError: if the database is not open or initialize() has not been called.
+        :raises DatabaseNotOpenError: if the database connection is not open.
+        :raises DatabaseExecutorUnavailableError: if the internal executor is not available.
+        :raises DatabaseNotInitializedError: if initialize() has not been called.
         """
         self._require_open()
         self._require_executor()
 
         if not self._initialized:
-            raise NodeDBError("Database schema is not initialized. Call initialize() first.")
+            raise DatabaseNotInitializedError(
+                "Database schema is not initialized. Call initialize() first."
+            )
 
     @staticmethod
     def _normalize_journal_mode(journal_mode: str) -> str:
@@ -492,17 +514,18 @@ class NodeDatabase:
 
         :param journal_mode: requested SQLite journal mode
         :return: normalized journal mode
-        :raises NodeDBError: if the value is unsupported.
+        :raises DatabaseConfigurationError: if the value is unsupported.
         """
         if not isinstance(journal_mode, str):
-            raise ConfigurationError("journal_mode must be str.")
+            raise DatabaseConfigurationError("journal_mode must be str.")
 
         normalized = journal_mode.strip().upper()
         allowed = {"WAL"}
 
         if normalized not in allowed:
-            raise ConfigurationError(
-                f"Unsupported journal_mode: {journal_mode!r}. Allowed values: {sorted(allowed)}."
+            raise DatabaseConfigurationError(
+                f"Unsupported journal_mode: {journal_mode!r}. "
+                f"Allowed values: {sorted(allowed)}."
             )
 
         return normalized
@@ -514,17 +537,18 @@ class NodeDatabase:
 
         :param synchronous: requested SQLite synchronous mode
         :return: normalized synchronous mode
-        :raises NodeDBError: if the value is unsupported.
+        :raises DatabaseConfigurationError: if the value is unsupported.
         """
         if not isinstance(synchronous, str):
-            raise ConfigurationError("synchronous must be str.")
+            raise DatabaseConfigurationError("synchronous must be str.")
 
         normalized = synchronous.strip().upper()
         allowed = {"NORMAL", "FULL"}
 
         if normalized not in allowed:
-            raise ConfigurationError(
-                f"Unsupported synchronous: {synchronous!r}. Allowed values: {sorted(allowed)}."
+            raise DatabaseConfigurationError(
+                f"Unsupported synchronous: {synchronous!r}. "
+                f"Allowed values: {sorted(allowed)}."
             )
 
         return normalized
@@ -533,7 +557,7 @@ class NodeDatabase:
         """
         Configure SQLite connection PRAGMAs for mesh_node_db.
 
-        :raises NodeDBError: if SQLite connection configuration fails.
+        :raises OperationalStorageError: if SQLite connection configuration fails.
         """
         self._require_open()
 
@@ -543,7 +567,9 @@ class NodeDatabase:
             self._conn.execute("PRAGMA foreign_keys = ON;")
             self._conn.execute("PRAGMA busy_timeout = 5000;")
         except sqlite3.Error as exc:
-            raise NodeDBError(f"Failed to configure database connection: {exc}") from exc
+            raise OperationalStorageError(
+                f"Failed to configure database connection: {exc}"
+            ) from exc
 
     def _validate_schema_shape(self) -> None:
         """
@@ -623,7 +649,12 @@ class NodeDatabase:
         }
 
         for table_name, expected in expected_fks.items():
-            rows = self._executor.fetchall(f"PRAGMA foreign_key_list({table_name})")
+            try:
+                rows = self._executor.fetchall(f"PRAGMA foreign_key_list({table_name})")
+            except NodeDBError as exc:
+                raise SchemaError(
+                    f"Failed to inspect foreign keys for table '{table_name}': {exc}"
+                ) from exc
             actual = {
                 (
                     str(row["from"]),
@@ -667,7 +698,12 @@ class NodeDatabase:
         actual_indexes: set[str] = set()
 
         for table_name in tables:
-            rows = self._executor.fetchall(f"PRAGMA index_list({table_name})")
+            try:
+                rows = self._executor.fetchall(f"PRAGMA index_list({table_name})")
+            except NodeDBError as exc:
+                raise SchemaError(
+                    f"Failed to inspect indexes for table '{table_name}': {exc}"
+                ) from exc
             for row in rows:
                 actual_indexes.add(str(row["name"]))
 
@@ -679,7 +715,7 @@ class NodeDatabase:
         """
         Create repository objects bound to the internal database executor.
 
-        :raises NodeDBError: if repository wiring cannot be completed.
+        :raises DatabaseExecutorUnavailableError: if executor wiring has not been completed.
         """
         self._require_executor()
 

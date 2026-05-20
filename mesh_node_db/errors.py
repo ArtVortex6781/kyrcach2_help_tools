@@ -6,6 +6,10 @@ __all__ = [
     "DatabaseConfigurationError",
     "StorageCryptoConfigurationError",
     "EncryptedFieldConfigurationError",
+    "DatabaseStateError",
+    "DatabaseNotOpenError",
+    "DatabaseExecutorUnavailableError",
+    "DatabaseNotInitializedError",
     "InvalidRecordError",
     "RecordNotFoundError",
     "SchemaError",
@@ -37,6 +41,22 @@ class StorageCryptoConfigurationError(ConfigurationError):
 
 class EncryptedFieldConfigurationError(ConfigurationError):
     """Raised when encrypted field configuration or AAD policy is invalid."""
+
+
+class DatabaseStateError(NodeDBError):
+    """Raised when database runtime state does not allow the requested operation."""
+
+
+class DatabaseNotOpenError(DatabaseStateError):
+    """Raised when an operation requires an open database connection."""
+
+
+class DatabaseExecutorUnavailableError(DatabaseStateError):
+    """Raised when the internal database executor is not available."""
+
+
+class DatabaseNotInitializedError(DatabaseStateError):
+    """Raised when an operation requires initialized database schema."""
 
 
 class InvalidRecordError(NodeDBError):
