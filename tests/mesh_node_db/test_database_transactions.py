@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+import uuid
+
 import pytest
 
 from mesh_node_db import (
@@ -8,9 +11,21 @@ from mesh_node_db import (
     ConstraintError,
     MessageRecord,
     NodeDatabase,
+    NodeDBCryptoAdapter,
     PeerRecord,
     TransactionError,
 )
+
+
+class EchoStorageProvider:
+    def encrypt_field(self, plaintext: bytes, *, aad: bytes, key_id) -> bytes:
+        return b"encrypted:" + plaintext
+
+    def decrypt_field(self, envelope: bytes, *, aad: bytes) -> bytes:
+        prefix = b"encrypted:"
+        if envelope.startswith(prefix):
+            return envelope[len(prefix):]
+        return envelope
 
 
 @pytest.fixture
@@ -19,16 +34,36 @@ def db_path(tmp_path):
 
 
 @pytest.fixture
-def db(db_path) -> NodeDatabase:
-    database = NodeDatabase(str(db_path))
+def crypto_adapter() -> NodeDBCryptoAdapter:
+    return NodeDBCryptoAdapter(
+        provider = EchoStorageProvider(),
+        active_storage_key_id = uuid.uuid4(),
+    )
+
+
+@pytest.fixture
+def db(db_path, crypto_adapter: NodeDBCryptoAdapter) -> NodeDatabase:
+    database = NodeDatabase(str(db_path), crypto_adapter = crypto_adapter)
     database.open()
     database.initialize()
     return database
 
 
+def raw_message_payload(db_path, message_id: str) -> bytes | None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT payload FROM messages WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+        return None if row is None else row[0]
+    finally:
+        conn.close()
+
+
 def make_peer(
         peer_id: str,
-        display_name: bytes,
+        display_name: str,
         created_at: int = 100,
         updated_at: int | None = None,
         is_deleted: bool = False,
@@ -55,7 +90,7 @@ def make_chat(
     return ChatRecord(
         chat_id = chat_id,
         chat_type = "group",
-        chat_name = f"chat:{chat_id}".encode(),
+        chat_name = f"chat:{chat_id}",
         created_at = created_at,
         updated_at = ts,
     )
@@ -78,7 +113,7 @@ def make_message(
         chat_id: str,
         sender_id: str,
         created_at: int = 100,
-        updated_at: int = 100,
+        updated_at: int | None = None,
         payload: bytes = b"payload",
 ) -> MessageRecord:
     ts = created_at if updated_at is None else updated_at
@@ -95,7 +130,7 @@ def make_message(
 
 class TestDirectSingleWrites:
     def test_direct_single_writes_work_without_run_in_transaction(self, db: NodeDatabase) -> None:
-        peer = make_peer("peer-1", b"Alice")
+        peer = make_peer("peer-1", "Alice")
         chat = make_chat("chat-1")
         message = make_message("msg-1", "chat-1", "peer-1", 200, 200, b"hello")
 
@@ -110,7 +145,7 @@ class TestDirectSingleWrites:
 
 class TestRunInTransaction:
     def test_run_in_transaction_success_persists_all_records(self, db: NodeDatabase) -> None:
-        peer = make_peer("peer-1", b"Alice")
+        peer = make_peer("peer-1", "Alice")
         chat = make_chat("chat-1")
         participant = make_participant("chat-1", "peer-1", 300)
         message = make_message("msg-1", "chat-1", "peer-1", 400, 400, b"hello")
@@ -129,7 +164,7 @@ class TestRunInTransaction:
         assert db.messages.read("msg-1") == message
 
     def test_run_in_transaction_rolls_back_all_records_on_arbitrary_exception(self, db: NodeDatabase) -> None:
-        peer = make_peer("peer-1", b"Alice")
+        peer = make_peer("peer-1", "Alice")
         chat = make_chat("chat-1")
         participant = make_participant("chat-1", "peer-1", 300)
         message = make_message("msg-1", "chat-1", "peer-1", 400, 400, b"hello")
@@ -150,7 +185,7 @@ class TestRunInTransaction:
         assert db.messages.read("msg-1") is None
 
     def test_run_in_transaction_wraps_storage_error_as_transaction_error(self, db: NodeDatabase) -> None:
-        peer = make_peer("peer-1", b"Alice")
+        peer = make_peer("peer-1", "Alice")
 
         def callback(tx: NodeDatabase) -> None:
             tx.peers.add(peer)
@@ -164,7 +199,7 @@ class TestRunInTransaction:
 
     def test_run_in_transaction_wraps_arbitrary_exception_as_transaction_error(self, db: NodeDatabase) -> None:
         def callback(tx: NodeDatabase) -> None:
-            tx.peers.add(make_peer("peer-1", b"Alice"))
+            tx.peers.add(make_peer("peer-1", "Alice"))
             raise ValueError("unexpected callback error")
 
         with pytest.raises(TransactionError) as exc_info:
@@ -174,12 +209,9 @@ class TestRunInTransaction:
         assert db.peers.read("peer-1") is None
 
     def test_nested_run_in_transaction_fails_fast_and_rolls_back(self, db: NodeDatabase) -> None:
-        def inner(tx: NodeDatabase) -> None:
-            tx.peers.add(make_peer("peer-2", b"Bob"))
-
         def outer(tx: NodeDatabase) -> None:
-            tx.peers.add(make_peer("peer-1", b"Alice"))
-            tx.run_in_transaction(inner)
+            tx.peers.add(make_peer("peer-1", "Alice"))
+            tx.run_in_transaction(lambda tx2: tx2.peers.add(make_peer("peer-2", "Bob")))
 
         with pytest.raises(TransactionError):
             db.run_in_transaction(outer)
@@ -195,8 +227,8 @@ class TestRunInTransaction:
             self,
             db: NodeDatabase,
     ) -> None:
-        peer = make_peer("peer-1", b"Alice", 100, 100)
-        other_peer = make_peer("peer-2", b"Bob", 110, 110)
+        peer = make_peer("peer-1", "Alice", 100, 100)
+        other_peer = make_peer("peer-2", "Bob", 110, 110)
         chat = make_chat("chat-1", 200, 200)
         participant = make_participant("chat-1", "peer-1", 300)
         message = make_message("msg-1", "chat-1", "peer-1", 400, 400, b"hello")
@@ -222,17 +254,21 @@ class TestRunInTransaction:
         assert restored_participant == participant
         assert restored_message == message
 
-    def test_run_in_transaction_message_update_rolls_back_updated_at_and_content(
+    def test_run_in_transaction_message_update_rolls_back_updated_at_content_and_raw_encrypted_blob(
             self,
             db: NodeDatabase,
+            db_path,
     ) -> None:
-        peer = make_peer("peer-1", b"Alice")
+        peer = make_peer("peer-1", "Alice")
         chat = make_chat("chat-1")
         message = make_message("msg-1", "chat-1", "peer-1", 400, 400, b"hello")
 
         db.peers.add(peer)
         db.chats.add(chat)
         db.messages.add(message)
+
+        old_raw_payload = raw_message_payload(db_path, "msg-1")
+        assert old_raw_payload == b"encrypted:hello"
 
         def callback(tx: NodeDatabase) -> None:
             tx.messages.update(
@@ -251,4 +287,7 @@ class TestRunInTransaction:
             db.run_in_transaction(callback)
 
         restored = db.messages.read("msg-1")
+        restored_raw_payload = raw_message_payload(db_path, "msg-1")
+
         assert restored == message
+        assert restored_raw_payload == old_raw_payload
