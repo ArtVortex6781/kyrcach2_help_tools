@@ -7,7 +7,6 @@ from ._validation import (
     require_bytes,
     require_non_empty_bytes,
     require_non_empty_str,
-    require_optional_str,
 )
 from .errors import (
     EncryptedFieldConfigurationError,
@@ -324,24 +323,18 @@ class NodeDBCryptoAdapter:
             field_name = "peers.display_name",
         )
 
-    def encrypt_chat_name(self, chat_id: str,
-                          chat_name: str | None) -> bytes | None:
+    def encrypt_chat_name(self, chat_id: str, chat_name: str) -> bytes:
         """
         Encrypt chats.chat_name.
 
-        None is stored as SQLite NULL and is not encrypted.
-
         :param chat_id: stable chat identifier
-        :param chat_name: logical chat name or None
-        :return: encrypted storage envelope bytes or None
+        :param chat_name: logical chat name
+        :return: encrypted storage envelope bytes
         :raises InvalidRecordError: if chat_id or chat_name is invalid.
         :raises EncryptedFieldError: if encryption fails.
         """
         require_non_empty_str(chat_id, field_name = "chat_id")
-        require_optional_str(chat_name, field_name = "chat_name")
-
-        if chat_name is None:
-            return None
+        require_non_empty_str(chat_name, field_name = "chat_name")
 
         plaintext = chat_name.encode("utf-8")
         aad = build_storage_field_aad("chats", "chat_name", chat_id)
@@ -352,24 +345,17 @@ class NodeDBCryptoAdapter:
             field_name = "chats.chat_name",
         )
 
-    def decrypt_chat_name(self, chat_id: str,
-                          envelope: bytes | None) -> str | None:
+    def decrypt_chat_name(self, chat_id: str, envelope: bytes) -> str:
         """
         Decrypt chats.chat_name.
 
-        SQLite NULL is returned as None.
-
         :param chat_id: stable chat identifier
-        :param envelope: encrypted storage envelope bytes or None
-        :return: logical chat name or None
+        :param envelope: encrypted storage envelope bytes
+        :return: logical chat name
         :raises InvalidRecordError: if chat_id or envelope is invalid.
         :raises EncryptedFieldError: if decryption or UTF-8 decoding fails.
         """
         require_non_empty_str(chat_id, field_name = "chat_id")
-
-        if envelope is None:
-            return None
-
         require_bytes(envelope, field_name = "envelope")
 
         aad = build_storage_field_aad("chats", "chat_name", chat_id)
