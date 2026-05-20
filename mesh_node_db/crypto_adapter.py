@@ -170,17 +170,34 @@ class CallableStorageCryptoProvider(StorageCryptoProvider):
         return plaintext
 
 
+def _frame_bytes(value: bytes, *, field_name: str = "value") -> bytes:
+    """
+    Encode bytes with a deterministic uint32 length prefix.
+
+    :param value: Bytes to frame.
+    :param field_name: Field name used in validation error messages.
+    :return: Length-prefixed bytes: uint32_be(length) || value.
+    :raises InvalidRecordError: If value is not bytes or length does not fit uint32.
+    """
+    require_bytes(value, field_name = field_name)
+
+    if len(value) > 2 ** 32 - 1:
+        raise InvalidRecordError(f"{field_name} length must fit uint32")
+
+    return len(value).to_bytes(4, "big") + value
+
+
 def build_storage_field_aad(table: str, field: str,
                             record_id: str | bytes) -> bytes:
     """
     Build deterministic AAD for one encrypted mesh_node_db storage field.
 
-    :param table: logical table name
-    :param field: logical encrypted field name
-    :param record_id: stable record identifier
-    :return: authenticated associated data bytes
-    :raises InvalidRecordError: if table, field or record_id shape is invalid.
-    :raises EncryptedFieldConfigurationError: if encrypted field pair is unsupported.
+    :param table: Logical table name.
+    :param field: Logical encrypted field name.
+    :param record_id: Stable record identifier.
+    :return: Authenticated associated data bytes.
+    :raises InvalidRecordError: If table, field or record_id shape is invalid.
+    :raises EncryptedFieldConfigurationError: If encrypted field pair is unsupported.
     """
     require_non_empty_str(table, field_name = "table")
     require_non_empty_str(field, field_name = "field")
@@ -190,15 +207,15 @@ def build_storage_field_aad(table: str, field: str,
             f"Encrypted field is not supported: {table}.{field}"
         )
 
+    table_bytes = table.encode("utf-8")
+    field_bytes = field.encode("utf-8")
     record_id_bytes = _record_id_to_bytes(record_id)
 
-    return b":".join(
-        (
-            _AAD_PREFIX,
-            table.encode("utf-8"),
-            field.encode("utf-8"),
-            record_id_bytes,
-        )
+    return (
+            _frame_bytes(_AAD_PREFIX, field_name = "aad_prefix")
+            + _frame_bytes(table_bytes, field_name = "table")
+            + _frame_bytes(field_bytes, field_name = "field")
+            + _frame_bytes(record_id_bytes, field_name = "record_id")
     )
 
 
