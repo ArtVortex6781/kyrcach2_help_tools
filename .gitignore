@@ -1,15 +1,17 @@
-cmake-build-*/
-*.iws
-out/
-.idea_modules/
-atlassian-ide-plugin.xml
-com_crashlytics_export_strings.xml
-crashlytics.properties
-crashlytics-build.properties
-fabric.properties
-.idea
-*.iml
-out
-gen
-.venv
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.idea/
 identifier.sqlite
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Build
+build/
+dist/
+*.egg-info/
