@@ -5,7 +5,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mesh_crypto.core import EncryptionKeyPair, HKDF_INFO_HANDSHAKE_BINDING, HKDF_INFO_SESSION_KEY
 from mesh_crypto.errors import InvalidInputError, InvalidKeyError, WrongKeyTypeError
-from mesh_crypto.primitives import derive_raw_shared_secret, derive_session_key
+from mesh_crypto.primitives import derive_session_key
+from mesh_crypto.primitives.dh import derive_raw_shared_secret
 
 
 class TestRawSharedSecret:
